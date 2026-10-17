@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { supabase } from '@/lib/supabase'
 import { X } from 'lucide-vue-next'
 
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 // 모바일 메뉴 열림 상태
 const isSidebarOpen = ref(false)
@@ -64,6 +66,24 @@ function handleMenuKeydown(event: KeyboardEvent) {
   }
 }
 
+// 트레이너 로그아웃
+async function handleLogout() {
+  // Supabase 로그인 세션 종료
+  const { error } = await supabase.auth.signOut()
+
+  if (error) {
+    console.error('로그아웃 오류:', error.message)
+    alert('로그아웃에 실패했습니다. 다시 시도해 주세요.')
+    return
+  }
+
+  // 모바일 메뉴 닫기
+  isSidebarOpen.value = false
+
+  // 로그인 페이지로 이동
+  await router.replace('/login')
+}
+
 // 페이지 이동 시 모바일 메뉴 닫기
 watch(
   () => route.fullPath,
@@ -77,7 +97,7 @@ watch(
   <div class="min-h-screen bg-slate-50 lg:flex">
     <!-- 왼쪽 사이드바 -->
     <div class="hidden lg:block">
-      <AppSidebar />
+      <AppSidebar @logout="handleLogout" />
     </div>
 
     <!-- 모바일 사이드바 배경 -->
@@ -110,7 +130,7 @@ watch(
         <X :size="22" aria-hidden="true" />
       </button>
 
-      <AppSidebar @navigate="closeSidebar" />
+      <AppSidebar @navigate="closeSidebar" @logout="handleLogout" />
     </div>
 
     <!-- 오른쪽 영역 -->

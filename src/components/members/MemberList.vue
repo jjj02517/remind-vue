@@ -28,7 +28,12 @@ defineProps<{
         >
           <!-- 회원명 -->
           <h3 class="text-lg font-semibold text-slate-900">
-            {{ member.name }}
+            <RouterLink
+              :to="{ name: 'member-detail', params: { id: member.id } }"
+              class="hover:text-blue-600 hover:underline"
+            >
+              {{ member.name }}
+            </RouterLink>
           </h3>
 
           <!-- PT 횟수 및 연락처 -->
@@ -72,7 +77,12 @@ defineProps<{
           <tbody class="divide-y divide-slate-100">
             <tr v-for="member in members" :key="member.id" class="hover:bg-slate-50">
               <td class="px-6 py-4 font-medium text-slate-900">
-                {{ member.name }}
+                <RouterLink
+                  :to="{ name: 'member-detail', params: { id: member.id } }"
+                  class="hover:text-blue-600 hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-blue-600"
+                >
+                  {{ member.name }}
+                </RouterLink>
               </td>
               <td class="px-6 py-4 text-slate-600">{{ member.totalSessions }}회</td>
               <td class="px-6 py-4 font-semibold text-blue-600">

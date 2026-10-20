@@ -50,6 +50,18 @@ const newMember = ref<NewMember>({
 // 이름 중복 경고 메시지
 const nameWarning = ref('')
 
+// 중복 회원명 확인 여부
+const isNameDuplicateConfirmed = ref(false)
+
+// 회원명 중복 검사 진행 상태
+const isCheckingName = ref(false)
+
+// 중복 검사 완료된 회원명
+const checkedName = ref('')
+
+// 이전 이름 검사 결과를 무시하기 위한 요청 번호
+let nameCheckId = 0
+
 // 연락처 유효성 검사 메시지
 const phoneError = ref('')
 
@@ -67,7 +79,11 @@ let phoneCheckId = 0
 
 // 회원 등록 또는 중복 검사 진행 상태
 const isBusy = computed(
-  () => isRegistering.value || isCheckingDuplicates.value || isCheckingPhone.value,
+  () =>
+    isRegistering.value ||
+    isCheckingDuplicates.value ||
+    isCheckingName.value ||
+    isCheckingPhone.value,
 )
 
 // 회원 등록 버튼 비활성화 조건
@@ -76,7 +92,17 @@ const isSubmitDisabled = computed(() => {
   if (isBusy.value) return true
 
   // 회원명 미입력
-  if (!newMember.value.name.trim()) return true
+  const name = newMember.value.name.trim()
+
+  if (!name) return true
+
+  // 현재 회원명의 중복 검사가 완료되지 않은 경우
+  if (checkedName.value !== name) return true
+
+  // 중복 이름을 확인하지 않은 경우
+  if (nameWarning.value && !isNameDuplicateConfirmed.value) {
+    return true
+  }
 
   // 연락처 형식이 올바르지 않은 경우
   const phone = normalizePhone(newMember.value.phone)
@@ -99,7 +125,15 @@ const isSubmitDisabled = computed(() => {
 
 // 회원명 입력 시 경고 초기화
 function handleNameInput() {
+  // 이전 이름 중복 검사 결과 무효화
+  nameCheckId++
+  checkedName.value = ''
+  isCheckingName.value = false
+
+  // 중복 경고 및 확인 상태 초기화
   nameWarning.value = ''
+  isNameDuplicateConfirmed.value = false
+  registerError.value = ''
 }
 
 // 연락처 입력 시 자동 하이픈 처리
@@ -116,6 +150,7 @@ function handlePhoneInput(event: Event) {
   checkedPhone.value = ''
   isCheckingPhone.value = false
   phoneError.value = ''
+  registerError.value = ''
 
   // 올바른 11자리 번호가 입력되면 자동 중복 검사
   const phone = normalizePhone(formattedPhone)
@@ -126,29 +161,55 @@ function handlePhoneInput(event: Event) {
 }
 
 // 회원명 중복 검사
-async function checkNameDuplicate() {
+async function checkNameDuplicate(): Promise<boolean | null> {
   const name = newMember.value.name.trim()
+  const requestId = ++nameCheckId
 
+  // 기존 검사 결과 초기화
+  checkedName.value = ''
   nameWarning.value = ''
 
-  if (!name) return
+  if (!name) return null
+
+  isCheckingName.value = true
 
   try {
-    // 같은 트레이너의 동일한 이름 조회
-    const { data, error } = await supabase.from('members').select('id').eq('name', name).limit(1)
+    // 공백과 대소문자를 무시하고 회원명 중복 검사
+    const { data: isDuplicate, error } = await supabase.rpc('check_member_name_duplicate', {
+      p_name: name,
+    })
 
     if (error) throw error
 
-    // 검사 중 입력값이 변경됐다면 이전 결과는 무시
-    if (name !== newMember.value.name.trim()) return
+    // 검사 결과 확인용 임시 로그
+    console.log('회원명 중복 검사:', name, isDuplicate)
 
-    // 이름은 중복되어도 등록 허용
-    if (data && data.length > 0) {
+    // 검사 중 입력값이 변경됐다면 이전 결과는 무시
+    if (requestId !== nameCheckId || name !== newMember.value.name.trim()) {
+      return null
+    }
+
+    // 현재 회원명 검사 완료
+    checkedName.value = name
+
+    // 이름은 중복되어도 확인 후 등록 허용
+    if (isDuplicate === true) {
       nameWarning.value = '이미 같은 이름의 회원이 있습니다. 동명이인인지 확인해 주세요.'
     }
+
+    return isDuplicate === true
   } catch (error) {
     console.error('회원명 중복 검사 오류:', error)
-    registerError.value = '회원명 중복 확인 중 문제가 발생했습니다.'
+
+    if (requestId === nameCheckId) {
+      registerError.value = '회원명 중복 확인 중 문제가 발생했습니다.'
+    }
+
+    return null
+  } finally {
+    if (requestId === nameCheckId) {
+      isCheckingName.value = false
+    }
   }
 }
 
@@ -234,8 +295,14 @@ function resetForm() {
   }
 
   nameWarning.value = ''
+  isNameDuplicateConfirmed.value = false
   phoneError.value = ''
   registerError.value = ''
+
+  // 이름 중복 검사 상태 초기화
+  nameCheckId++
+  checkedName.value = ''
+  isCheckingName.value = false
 
   // 연락처 중복 검사 상태 초기화
   phoneCheckId++
@@ -245,7 +312,7 @@ function resetForm() {
 
 // 신규 회원 등록
 async function submitMember() {
-  if (isBusy.value) return
+  if (isSubmitDisabled.value) return
 
   const name = newMember.value.name.trim()
   const phone = normalizePhone(newMember.value.phone)
@@ -265,11 +332,19 @@ async function submitMember() {
       return
     }
 
-    // 등록 직전 회원명과 연락처 중복 검사
-    await checkNameDuplicate()
+    // 등록 직전 회원명과 연락처 중복 재검사
+    const isNameDuplicate = await checkNameDuplicate()
     const isPhoneAvailable = await checkPhoneDuplicate()
 
-    if (registerError.value || !isPhoneAvailable) return
+    // 중복 검사 실패 시 등록 중단
+    if (registerError.value || isNameDuplicate === null || !isPhoneAvailable) {
+      return
+    }
+
+    // 중복 이름을 사용자가 확인하지 않았다면 등록 중단
+    if (isNameDuplicate && !isNameDuplicateConfirmed.value) {
+      return
+    }
 
     // Supabase 회원 및 PT 이용권 등록
     await registerMember({
@@ -346,6 +421,20 @@ defineExpose({
         <p v-if="nameWarning" role="status" class="mt-2 text-xs text-amber-600">
           {{ nameWarning }}
         </p>
+
+        <!-- 중복 회원명 확인 -->
+        <label
+          v-if="nameWarning"
+          class="mt-3 flex cursor-pointer items-center gap-2 text-sm text-slate-700"
+        >
+          <input
+            v-model="isNameDuplicateConfirmed"
+            type="checkbox"
+            :disabled="isBusy"
+            class="h-4 w-4 accent-blue-600"
+          />
+          동명이인임을 확인했습니다.
+        </label>
       </div>
 
       <!-- 연락처 -->
@@ -368,7 +457,6 @@ defineExpose({
           class="w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
           :class="phoneError ? 'border-red-500' : 'border-slate-200'"
           @input="handlePhoneInput"
-          @blur="checkPhoneDuplicate"
         />
 
         <!-- 연락처 유효성 검사 메시지 -->

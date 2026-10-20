@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/vue-query'
 import { supabase } from '@/lib/supabase'
 import { formatPhone } from '@/utils/phone'
 import AddPtPackageDialog from '@/components/members/AddPtPackageDialog.vue'
+import EditMemberDialog from '@/components/members/EditMemberDialog.vue'
 
 // 회원 상세 화면 데이터 타입
 interface MemberDetailData {
@@ -34,6 +35,14 @@ const packageDialog = ref<InstanceType<typeof AddPtPackageDialog> | null>(null)
 // PT 이용권 추가 모달 열기
 function openPackageDialog() {
   packageDialog.value?.open()
+}
+
+// 회원 정보 수정 모달 컴포넌트 참조
+const editDialog = ref<InstanceType<typeof EditMemberDialog> | null>(null)
+
+// 회원 정보 수정 모달 열기
+function openEditDialog() {
+  editDialog.value?.open()
 }
 
 // 로그인한 트레이너 ID
@@ -287,7 +296,19 @@ onMounted(async () => {
 
       <!-- 회원 정보 -->
       <div class="mt-8 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <h2 class="text-lg font-semibold text-slate-900">기본 정보</h2>
+        <!-- 회원 정보 제목 및 수정 버튼 -->
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-lg font-semibold text-slate-900">기본 정보</h2>
+
+          <!-- 회원 정보 수정 -->
+          <button
+            type="button"
+            class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            @click="openEditDialog"
+          >
+            정보 수정
+          </button>
+        </div>
 
         <div class="mt-5 space-y-4">
           <!-- 회원명 -->
@@ -463,6 +484,14 @@ onMounted(async () => {
 
       <!-- PT 이용권 추가 모달 -->
       <AddPtPackageDialog ref="packageDialog" :member-id="member.id" />
+
+      <!-- 회원 정보 수정 모달 -->
+      <EditMemberDialog
+        ref="editDialog"
+        :member-id="member.id"
+        :name="member.name"
+        :phone="member.phone"
+      />
     </template>
 
     <!-- 회원 정보가 없는 경우 -->

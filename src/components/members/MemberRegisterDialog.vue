@@ -1,18 +1,41 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { storeToRefs } from 'pinia'
+import { computed, ref } from 'vue'
+import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { formatPhone, isValidPhone, normalizePhone } from '@/utils/phone'
-import { useMemberStore } from '@/stores/members'
+import { supabase } from '@/lib/supabase'
 import type { Member } from '@/types/member'
 
 // 신규 회원 등록 데이터 타입
 type NewMember = Pick<Member, 'name' | 'phone' | 'totalSessions'>
 
-// 회원 데이터 Store
-const memberStore = useMemberStore()
+// TanStack Query 캐시 관리
+const queryClient = useQueryClient()
 
-// 회원 등록 상태
-const { isRegistering, registerError } = storeToRefs(memberStore)
+// 회원 등록 오류 메시지
+const registerError = ref('')
+
+// Supabase 회원 등록 Mutation
+const { mutateAsync: registerMember, isPending: isRegistering } = useMutation({
+  // 신규 회원 및 PT 이용권 등록
+  mutationFn: async (member: NewMember) => {
+    const { error } = await supabase.rpc('register_member_with_pt', {
+      p_name: member.name.trim(),
+      p_phone: member.phone,
+      p_total_sessions: member.totalSessions,
+    })
+
+    if (error) {
+      throw error
+    }
+  },
+
+  // 등록 성공 시 회원 목록 캐시 무효화
+  onSuccess: async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ['members'],
+    })
+  },
+})
 
 // 회원 등록 모달
 const registerDialog = ref<HTMLDialogElement | null>(null)
@@ -24,8 +47,60 @@ const newMember = ref<NewMember>({
   totalSessions: 1,
 })
 
+// 이름 중복 경고 메시지
+const nameWarning = ref('')
+
 // 연락처 유효성 검사 메시지
 const phoneError = ref('')
+
+// 중복 검사 상태
+const isCheckingDuplicates = ref(false)
+
+// 연락처 중복 검사 진행 상태
+const isCheckingPhone = ref(false)
+
+// 중복 검사 완료된 연락처
+const checkedPhone = ref('')
+
+// 이전 연락처 검사 결과를 무시하기 위한 요청 번호
+let phoneCheckId = 0
+
+// 회원 등록 또는 중복 검사 진행 상태
+const isBusy = computed(
+  () => isRegistering.value || isCheckingDuplicates.value || isCheckingPhone.value,
+)
+
+// 회원 등록 버튼 비활성화 조건
+const isSubmitDisabled = computed(() => {
+  // 등록 또는 중복 검사 진행 중
+  if (isBusy.value) return true
+
+  // 회원명 미입력
+  if (!newMember.value.name.trim()) return true
+
+  // 연락처 형식이 올바르지 않은 경우
+  const phone = normalizePhone(newMember.value.phone)
+
+  if (!isValidPhone(phone)) return true
+
+  // 연락처 중복 또는 유효성 검사 오류
+  if (phoneError.value) return true
+
+  // 현재 연락처의 중복 검사가 완료되지 않은 경우
+  if (checkedPhone.value !== phone) return true
+
+  // PT 횟수가 1 이상의 정수가 아닌 경우
+  if (!Number.isInteger(newMember.value.totalSessions) || newMember.value.totalSessions < 1) {
+    return true
+  }
+
+  return false
+})
+
+// 회원명 입력 시 경고 초기화
+function handleNameInput() {
+  nameWarning.value = ''
+}
 
 // 연락처 입력 시 자동 하이픈 처리
 function handlePhoneInput(event: Event) {
@@ -36,7 +111,98 @@ function handlePhoneInput(event: Event) {
   input.value = formattedPhone
   newMember.value.phone = formattedPhone
 
+  // 기존 중복 검사 결과 초기화
+  phoneCheckId++
+  checkedPhone.value = ''
+  isCheckingPhone.value = false
   phoneError.value = ''
+
+  // 올바른 11자리 번호가 입력되면 자동 중복 검사
+  const phone = normalizePhone(formattedPhone)
+
+  if (isValidPhone(phone)) {
+    void checkPhoneDuplicate()
+  }
+}
+
+// 회원명 중복 검사
+async function checkNameDuplicate() {
+  const name = newMember.value.name.trim()
+
+  nameWarning.value = ''
+
+  if (!name) return
+
+  try {
+    // 같은 트레이너의 동일한 이름 조회
+    const { data, error } = await supabase.from('members').select('id').eq('name', name).limit(1)
+
+    if (error) throw error
+
+    // 검사 중 입력값이 변경됐다면 이전 결과는 무시
+    if (name !== newMember.value.name.trim()) return
+
+    // 이름은 중복되어도 등록 허용
+    if (data && data.length > 0) {
+      nameWarning.value = '이미 같은 이름의 회원이 있습니다. 동명이인인지 확인해 주세요.'
+    }
+  } catch (error) {
+    console.error('회원명 중복 검사 오류:', error)
+    registerError.value = '회원명 중복 확인 중 문제가 발생했습니다.'
+  }
+}
+
+// 연락처 중복 검사
+async function checkPhoneDuplicate(): Promise<boolean> {
+  const phone = normalizePhone(newMember.value.phone)
+  const requestId = ++phoneCheckId
+
+  // 기존 검사 결과 초기화
+  checkedPhone.value = ''
+  phoneError.value = ''
+
+  // 연락처 유효성 검사
+  if (!isValidPhone(phone)) {
+    phoneError.value = '010으로 시작하는 11자리 휴대폰 번호를 입력해 주세요.'
+    return false
+  }
+
+  isCheckingPhone.value = true
+
+  try {
+    // 같은 트레이너의 동일한 연락처 조회
+    const { data, error } = await supabase.from('members').select('id').eq('phone', phone).limit(1)
+
+    if (error) throw error
+
+    // 검사 중 연락처가 변경되었다면 이전 결과 무시
+    if (requestId !== phoneCheckId || phone !== normalizePhone(newMember.value.phone)) {
+      return false
+    }
+
+    // 연락처가 중복되면 등록 차단
+    if (data && data.length > 0) {
+      phoneError.value = '이미 등록된 연락처입니다. 기존 회원을 확인해 주세요.'
+      return false
+    }
+
+    // 사용 가능한 연락처로 확인 완료
+    checkedPhone.value = phone
+
+    return true
+  } catch (error) {
+    console.error('연락처 중복 검사 오류:', error)
+
+    if (requestId === phoneCheckId) {
+      registerError.value = '연락처 중복 확인 중 문제가 발생했습니다.'
+    }
+
+    return false
+  } finally {
+    if (requestId === phoneCheckId) {
+      isCheckingPhone.value = false
+    }
+  }
 }
 
 // 회원 등록 모달 열기
@@ -47,14 +213,14 @@ function openRegisterDialog() {
 
 // 회원 등록 모달 닫기
 function closeRegisterDialog() {
-  if (isRegistering.value) return
+  if (isBusy.value) return
 
   registerDialog.value?.close()
 }
 
 // 등록 중 ESC로 모달이 닫히지 않도록 처리
 function handleCancel(event: Event) {
-  if (isRegistering.value) {
+  if (isBusy.value) {
     event.preventDefault()
   }
 }
@@ -67,13 +233,19 @@ function resetForm() {
     totalSessions: 1,
   }
 
+  nameWarning.value = ''
   phoneError.value = ''
   registerError.value = ''
+
+  // 연락처 중복 검사 상태 초기화
+  phoneCheckId++
+  checkedPhone.value = ''
+  isCheckingPhone.value = false
 }
 
 // 신규 회원 등록
 async function submitMember() {
-  if (isRegistering.value) return
+  if (isBusy.value) return
 
   const name = newMember.value.name.trim()
   const phone = normalizePhone(newMember.value.phone)
@@ -83,23 +255,47 @@ async function submitMember() {
     return
   }
 
-  // 연락처 유효성 검사
-  if (!isValidPhone(phone)) {
-    phoneError.value = '010으로 시작하는 11자리 휴대폰 번호를 입력해 주세요.'
+  registerError.value = ''
+  isCheckingDuplicates.value = true
+
+  try {
+    // 연락처 유효성 검사
+    if (!isValidPhone(phone)) {
+      phoneError.value = '010으로 시작하는 11자리 휴대폰 번호를 입력해 주세요.'
+      return
+    }
+
+    // 등록 직전 회원명과 연락처 중복 검사
+    await checkNameDuplicate()
+    const isPhoneAvailable = await checkPhoneDuplicate()
+
+    if (registerError.value || !isPhoneAvailable) return
+
+    // Supabase 회원 및 PT 이용권 등록
+    await registerMember({
+      name,
+      phone,
+      totalSessions,
+    })
+
+    // 등록 성공 시 모달 닫기
+    // isCheckingDuplicates 상태는 finally에서 해제
+  } catch (error) {
+    console.error('회원 등록 오류:', error)
+
+    // DB UNIQUE 제약조건으로 중복 차단된 경우
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      phoneError.value = '이미 등록된 연락처입니다. 기존 회원을 확인해 주세요.'
+    } else {
+      registerError.value = '회원 등록에 실패했습니다.'
+    }
+
     return
+  } finally {
+    isCheckingDuplicates.value = false
   }
 
-  // Supabase 회원 및 PT 이용권 등록
-  const isSuccess = await memberStore.registerMember({
-    name,
-    phone,
-    totalSessions,
-  })
-
-  // 등록 성공 시 모달 닫기
-  if (isSuccess) {
-    closeRegisterDialog()
-  }
+  closeRegisterDialog()
 }
 
 // 부모에서 모달 열기 함수를 사용할 수 있도록 공개
@@ -133,14 +329,23 @@ defineExpose({
         <label for="member-name" class="mb-2 block text-sm font-medium text-slate-700">
           회원명
         </label>
+
         <input
           id="member-name"
           v-model="newMember.name"
           type="text"
           required
           placeholder="회원명을 입력하세요"
-          class="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+          :disabled="isBusy"
+          class="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
+          @input="handleNameInput"
+          @blur="checkNameDuplicate"
         />
+
+        <!-- 회원명 중복 경고 메시지 -->
+        <p v-if="nameWarning" role="status" class="mt-2 text-xs text-amber-600">
+          {{ nameWarning }}
+        </p>
       </div>
 
       <!-- 연락처 -->
@@ -159,9 +364,11 @@ defineExpose({
           placeholder="010-0000-0000"
           :aria-invalid="!!phoneError"
           aria-describedby="member-phone-error"
-          class="w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-blue-500"
+          :disabled="isBusy"
+          class="w-full rounded-lg border px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
           :class="phoneError ? 'border-red-500' : 'border-slate-200'"
           @input="handlePhoneInput"
+          @blur="checkPhoneDuplicate"
         />
 
         <!-- 연락처 유효성 검사 메시지 -->
@@ -175,6 +382,7 @@ defineExpose({
         <label for="member-sessions" class="mb-2 block text-sm font-medium text-slate-700">
           총 PT 횟수
         </label>
+
         <input
           id="member-sessions"
           v-model.number="newMember.totalSessions"
@@ -182,7 +390,8 @@ defineExpose({
           min="1"
           step="1"
           required
-          class="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+          :disabled="isBusy"
+          class="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
         />
       </div>
 
@@ -195,19 +404,20 @@ defineExpose({
       <div class="flex justify-end gap-3 pt-2">
         <button
           type="button"
-          :disabled="isRegistering"
+          :disabled="isBusy"
           class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           @click="closeRegisterDialog"
         >
           취소
         </button>
 
+        <!-- 회원 등록 -->
         <button
           type="submit"
-          :disabled="isRegistering"
-          class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="isSubmitDisabled"
+          class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
         >
-          {{ isRegistering ? '등록 중...' : '회원 등록' }}
+          {{ isBusy ? '확인 중...' : '회원 등록' }}
         </button>
       </div>
     </form>

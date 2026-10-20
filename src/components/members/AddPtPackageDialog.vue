@@ -1,19 +1,50 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { storeToRefs } from 'pinia'
-
-import { useMemberStore } from '@/stores/members'
+import { useMutation, useQueryClient } from '@tanstack/vue-query'
+import { supabase } from '@/lib/supabase'
 
 // 부모 컴포넌트에서 회원 ID 전달받기
 const props = defineProps<{
   memberId: string
 }>()
 
-// 회원 데이터 Store
-const memberStore = useMemberStore()
+// TanStack Query 캐시 관리
+const queryClient = useQueryClient()
 
-// PT 이용권 추가 상태
-const { isAddingPackage, addPackageError } = storeToRefs(memberStore)
+// PT 이용권 추가 오류 메시지
+const addPackageError = ref('')
+
+// PT 이용권 추가 Mutation
+const { mutateAsync: addPtPackage, isPending: isAddingPackage } = useMutation({
+  // 기존 회원의 PT 이용권 추가
+  mutationFn: async (totalSessions: number) => {
+    // Supabase에 PT 이용권 추가
+    const { error } = await supabase.rpc('add_pt_package', {
+      p_member_id: props.memberId,
+      p_total_sessions: totalSessions,
+    })
+
+    if (error) {
+      throw error
+    }
+  },
+
+  // PT 이용권 추가 성공 시 데이터 갱신
+  onSuccess: async () => {
+    // 회원 목록 및 이용권 내역 캐시 무효화
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ['members'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['member-packages', props.memberId],
+      }),
+    ])
+
+    // 아직 Pinia를 사용하는 회원 상세 페이지 데이터 갱신
+    // await Promise.all([memberStore.fetchMembers(), memberStore.fetchMemberPackages(props.memberId)])
+  },
+})
 
 // PT 이용권 추가 모달
 const packageDialog = ref<HTMLDialogElement | null>(null)
@@ -52,12 +83,17 @@ async function submitPackage() {
     return
   }
 
-  // Supabase에 PT 이용권 추가
-  const isSuccess = await memberStore.addPtPackage(props.memberId, totalSessions.value)
+  addPackageError.value = ''
 
-  // 추가 성공 시 모달 닫기
-  if (isSuccess) {
+  try {
+    // Supabase에 PT 이용권 추가
+    await addPtPackage(totalSessions.value)
+
+    // 추가 성공 시 모달 닫기
     closePackageDialog()
+  } catch (error) {
+    console.error('PT 이용권 추가 오류:', error)
+    addPackageError.value = 'PT 이용권 추가에 실패했습니다.'
   }
 }
 

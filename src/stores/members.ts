@@ -1,9 +1,18 @@
-import { supabase } from '@/lib/supabase'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { Member } from '@/types/member'
 
+// TanStack Query로 이전하여 현재 사용하지 않음
+// import { supabase } from '@/lib/supabase'
+
+/*
+ * ========================================
+ * 기존 Pinia 서버 데이터 타입 (참고용)
+ * ========================================
+ */
+
 // Supabase 회원 데이터 타입
+/*
 interface DbMember {
   id: string
   name: string
@@ -11,8 +20,10 @@ interface DbMember {
   totalSessions: number | null
   remainingSessions: number | null
 }
+*/
 
 // Supabase PT 이용권 데이터 타입
+/*
 interface DbPtPackage {
   id: string
   member_id: string
@@ -25,6 +36,7 @@ interface DbPtPackage {
   status: string
   created_at: string
 }
+*/
 
 // 회원 데이터 전역 관리
 export const useMemberStore = defineStore('members', () => {
@@ -53,6 +65,18 @@ export const useMemberStore = defineStore('members', () => {
     },
   ])
 
+  /*
+   * ========================================
+   * 기존 Pinia 서버 데이터 관리 (참고용)
+   *
+   * 현재는 TanStack Query로 이전 완료
+   * - useQuery: 회원 및 이용권 조회
+   * - useMutation: 회원 등록 및 PT 이용권 추가
+   * - invalidateQueries: 변경 후 캐시 갱신
+   * ========================================
+   */
+
+  /*
   // Supabase 회원 데이터
   const dbMembers = ref<DbMember[]>([])
 
@@ -113,7 +137,9 @@ export const useMemberStore = defineStore('members', () => {
         // PT 횟수제 이용권만 필터링
         const ptPackages = member.member_packages.filter(
           (pkg) =>
-            pkg.package_type === 'pt' && pkg.usage_type === 'count' && pkg.status !== 'cancelled',
+            pkg.package_type === 'pt' &&
+            pkg.usage_type === 'count' &&
+            pkg.status !== 'cancelled',
         )
 
         // PT 이용권 정보가 없는 경우
@@ -135,7 +161,9 @@ export const useMemberStore = defineStore('members', () => {
 
         // 이용 중인 PT의 잔여 횟수 합산
         const remainingSessions = ptPackages.reduce(
-          (total, pkg) => total + (pkg.status === 'active' ? (pkg.remaining_sessions ?? 0) : 0),
+          (total, pkg) =>
+            total +
+            (pkg.status === 'active' ? (pkg.remaining_sessions ?? 0) : 0),
           0,
         )
 
@@ -191,7 +219,9 @@ export const useMemberStore = defineStore('members', () => {
   }
 
   // 신규 회원 등록
-  async function registerMember(member: Pick<Member, 'name' | 'phone' | 'totalSessions'>) {
+  async function registerMember(
+    member: Pick<Member, 'name' | 'phone' | 'totalSessions'>,
+  ) {
     if (isRegistering.value) return false
 
     isRegistering.value = true
@@ -250,7 +280,10 @@ export const useMemberStore = defineStore('members', () => {
       }
 
       // 이용권 추가 성공 시 회원 목록 및 이용권 내역 다시 조회
-      await Promise.all([fetchMembers(), fetchMemberPackages(memberId)])
+      await Promise.all([
+        fetchMembers(),
+        fetchMemberPackages(memberId),
+      ])
 
       return true
     } catch (error) {
@@ -261,6 +294,7 @@ export const useMemberStore = defineStore('members', () => {
       isAddingPackage.value = false
     }
   }
+  */
 
   // 회원 ID로 조회
   function getMemberById(id: number) {
@@ -268,7 +302,13 @@ export const useMemberStore = defineStore('members', () => {
   }
 
   return {
+    // 현재 사용 중인 Mock 회원 데이터 및 조회 함수
     members,
+    getMemberById,
+
+    /*
+     * 기존 Pinia 서버 데이터 관련 항목 (참고용)
+     *
     dbMembers,
     isLoading,
     fetchError,
@@ -283,6 +323,6 @@ export const useMemberStore = defineStore('members', () => {
     fetchMembers,
     registerMember,
     addPtPackage,
-    getMemberById,
+    */
   }
 })

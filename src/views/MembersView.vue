@@ -1,18 +1,64 @@
 <script setup lang="ts">
-import { storeToRefs } from 'pinia'
-import { useMemberStore } from '@/stores/members'
 import MemberSearch from '@/components/members/MemberSearch.vue'
 import MemberList from '@/components/members/MemberList.vue'
 import MemberRegisterDialog from '@/components/members/MemberRegisterDialog.vue'
-import type { Member } from '@/types/member'
 import { normalizePhone } from '@/utils/phone'
 import { computed, onMounted, ref } from 'vue'
+import { useQuery } from '@tanstack/vue-query'
+import { getMembers } from '@/api/members'
+import { supabase } from '@/lib/supabase'
 
-// 회원 데이터 Store
-const memberStore = useMemberStore()
+// 로그인한 트레이너 ID
+const trainerId = ref<string | null>(null)
 
-// Store의 반응형 회원 데이터 가져오기
-const { dbMembers, isLoading, fetchError } = storeToRefs(memberStore)
+// 사용자 정보 조회 오류
+const authError = ref('')
+
+// 회원 관리 페이지 진입 시 로그인한 사용자 확인
+onMounted(async () => {
+  const { data, error } = await supabase.auth.getSession()
+
+  if (error) {
+    console.error('사용자 정보 조회 오류:', error.message)
+    authError.value = '사용자 정보를 확인하지 못했습니다.'
+    return
+  }
+
+  trainerId.value = data.session?.user.id ?? null
+})
+
+// TanStack Query로 Supabase 회원 목록 조회
+const {
+  data: dbMembers,
+  isPending: isLoading,
+  error: queryError,
+} = useQuery({
+  // 트레이너별로 회원 목록 캐시 구분
+  queryKey: computed(() => ['members', trainerId.value]),
+
+  // Supabase 회원 목록 조회
+  queryFn: getMembers,
+
+  // 로그인한 트레이너 ID가 있을 때만 조회
+  enabled: computed(() => !!trainerId.value),
+
+  // 5분 동안 데이터를 최신 상태로 간주
+  staleTime: 1000 * 60 * 5,
+
+  // 디버깅을 위해 오류 발생 시 자동 재시도 끄기
+  retry: false,
+
+  // 디버깅을 위해 브라우저 포커스 시 자동 재조회 끄기
+  refetchOnWindowFocus: false,
+})
+
+// 회원 목록 조회 오류 메시지
+const fetchError = computed(() => {
+  if (authError.value) return authError.value
+  if (queryError.value) return '회원 목록을 불러오지 못했습니다.'
+
+  return ''
+})
 
 // 회원 검색어
 const searchKeyword = ref('')
@@ -22,7 +68,7 @@ const filteredMembers = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
   const phoneKeyword = normalizePhone(keyword)
 
-  return dbMembers.value.filter((member) => {
+  return (dbMembers.value ?? []).filter((member) => {
     const matchesName = member.name.toLowerCase().includes(keyword)
 
     const matchesPhone = phoneKeyword !== '' && normalizePhone(member.phone).includes(phoneKeyword)
@@ -38,11 +84,6 @@ const registerDialog = ref<InstanceType<typeof MemberRegisterDialog> | null>(nul
 function openRegisterDialog() {
   registerDialog.value?.open()
 }
-
-// 회원 관리 페이지 진입 시 Supabase 회원 목록 조회
-onMounted(() => {
-  memberStore.fetchMembers()
-})
 </script>
 
 <template>
@@ -69,13 +110,13 @@ onMounted(() => {
 
     <!-- Supabase 회원 조회 상태 확인 (임시) -->
     <div class="mt-4 rounded-lg border border-slate-200 bg-white p-4 text-sm">
-      <p v-if="isLoading" class="text-slate-500">Supabase 회원 목록 불러오는 중...</p>
-
-      <p v-else-if="fetchError" class="text-red-600">
+      <p v-if="fetchError" class="text-red-600">
         {{ fetchError }}
       </p>
 
-      <p v-else class="text-slate-600">Supabase 등록 회원: {{ dbMembers.length }}명</p>
+      <p v-else-if="isLoading" class="text-slate-500">Supabase 회원 목록 불러오는 중...</p>
+
+      <p v-else class="text-slate-600">Supabase 등록 회원: {{ dbMembers?.length ?? 0 }}명</p>
     </div>
 
     <!-- 회원 목록 -->

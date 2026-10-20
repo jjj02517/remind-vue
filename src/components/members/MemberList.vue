@@ -1,9 +1,18 @@
 <script setup lang="ts">
-import type { Member } from '@/types/member'
 import { formatPhone } from '@/utils/phone'
+
+// 회원 목록에 필요한 데이터 타입
+interface MemberListItem {
+  id: string | number
+  name: string
+  phone: string
+  totalSessions?: number | null
+  remainingSessions?: number | null
+}
+
 // 부모 컴포넌트에서 회원 목록 전달받기
 defineProps<{
-  members: Member[]
+  members: MemberListItem[]
 }>()
 </script>
 
@@ -41,14 +50,16 @@ defineProps<{
             <!-- 총 PT -->
             <div class="flex items-center justify-between">
               <span class="text-sm text-slate-500">총 PT</span>
-              <span class="text-sm font-medium text-slate-800"> {{ member.totalSessions }}회 </span>
+              <span class="text-sm font-medium text-slate-800">
+                {{ member.totalSessions == null ? '—' : `${member.totalSessions}회` }}
+              </span>
             </div>
 
             <!-- 잔여 PT -->
             <div class="flex items-center justify-between">
               <span class="text-sm text-slate-500">잔여 PT</span>
               <span class="text-sm font-semibold text-blue-600">
-                {{ member.remainingSessions }}회
+                {{ member.remainingSessions == null ? '—' : `${member.remainingSessions}회` }}
               </span>
             </div>
 
@@ -76,6 +87,7 @@ defineProps<{
 
           <tbody class="divide-y divide-slate-100">
             <tr v-for="member in members" :key="member.id" class="hover:bg-slate-50">
+              <!-- 회원명 -->
               <td class="px-6 py-4 font-medium text-slate-900">
                 <RouterLink
                   :to="{ name: 'member-detail', params: { id: member.id } }"
@@ -84,10 +96,18 @@ defineProps<{
                   {{ member.name }}
                 </RouterLink>
               </td>
-              <td class="px-6 py-4 text-slate-600">{{ member.totalSessions }}회</td>
-              <td class="px-6 py-4 font-semibold text-blue-600">
-                {{ member.remainingSessions }}회
+
+              <!-- 총 PT -->
+              <td class="px-6 py-4 text-slate-600">
+                {{ member.totalSessions == null ? '—' : `${member.totalSessions}회` }}
               </td>
+
+              <!-- 잔여 PT -->
+              <td class="px-6 py-4 font-semibold text-blue-600">
+                {{ member.remainingSessions == null ? '—' : `${member.remainingSessions}회` }}
+              </td>
+
+              <!-- 연락처 -->
               <td class="px-6 py-4 text-slate-600">
                 {{ formatPhone(member.phone) }}
               </td>

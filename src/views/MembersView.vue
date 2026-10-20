@@ -6,13 +6,13 @@ import MemberList from '@/components/members/MemberList.vue'
 import MemberRegisterDialog from '@/components/members/MemberRegisterDialog.vue'
 import type { Member } from '@/types/member'
 import { normalizePhone } from '@/utils/phone'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 // 회원 데이터 Store
 const memberStore = useMemberStore()
 
 // Store의 반응형 회원 데이터 가져오기
-const { members } = storeToRefs(memberStore)
+const { dbMembers, isLoading, fetchError } = storeToRefs(memberStore)
 
 // 회원 검색어
 const searchKeyword = ref('')
@@ -22,7 +22,7 @@ const filteredMembers = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
   const phoneKeyword = normalizePhone(keyword)
 
-  return members.value.filter((member) => {
+  return dbMembers.value.filter((member) => {
     const matchesName = member.name.toLowerCase().includes(keyword)
 
     const matchesPhone = phoneKeyword !== '' && normalizePhone(member.phone).includes(phoneKeyword)
@@ -38,6 +38,11 @@ const registerDialog = ref<InstanceType<typeof MemberRegisterDialog> | null>(nul
 function openRegisterDialog() {
   registerDialog.value?.open()
 }
+
+// 회원 관리 페이지 진입 시 Supabase 회원 목록 조회
+onMounted(() => {
+  memberStore.fetchMembers()
+})
 </script>
 
 <template>
@@ -62,10 +67,21 @@ function openRegisterDialog() {
     <!-- 회원 검색 -->
     <MemberSearch v-model="searchKeyword" />
 
+    <!-- Supabase 회원 조회 상태 확인 (임시) -->
+    <div class="mt-4 rounded-lg border border-slate-200 bg-white p-4 text-sm">
+      <p v-if="isLoading" class="text-slate-500">Supabase 회원 목록 불러오는 중...</p>
+
+      <p v-else-if="fetchError" class="text-red-600">
+        {{ fetchError }}
+      </p>
+
+      <p v-else class="text-slate-600">Supabase 등록 회원: {{ dbMembers.length }}명</p>
+    </div>
+
     <!-- 회원 목록 -->
     <MemberList :members="filteredMembers" />
 
     <!-- 회원 등록 모달 -->
-    <MemberRegisterDialog ref="registerDialog" @register="memberStore.registerMember" />
+    <MemberRegisterDialog ref="registerDialog" />
   </div>
 </template>

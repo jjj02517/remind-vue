@@ -16,7 +16,8 @@ export interface MemberPackage {
   usageType: UsageType
   price: number
   totalSessions: number | null
-  startDate: string
+  remainingSessions: number | null
+  startDate: string | null
   endDate: string | null
   status: PackageStatus
   createdAt: string

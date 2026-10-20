@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { formatPhone, isValidPhone, normalizePhone } from '@/utils/phone'
+import { useMemberStore } from '@/stores/members'
 import type { Member } from '@/types/member'
 
 // 신규 회원 등록 데이터 타입
 type NewMember = Pick<Member, 'name' | 'phone' | 'totalSessions'>
 
-// 부모에게 회원 등록 이벤트 전달
-const emit = defineEmits<{
-  (e: 'register', member: NewMember): void
-}>()
+// 회원 데이터 Store
+const memberStore = useMemberStore()
+
+// 회원 등록 상태
+const { isRegistering, registerError } = storeToRefs(memberStore)
 
 // 회원 등록 모달
 const registerDialog = ref<HTMLDialogElement | null>(null)
@@ -38,12 +41,22 @@ function handlePhoneInput(event: Event) {
 
 // 회원 등록 모달 열기
 function openRegisterDialog() {
+  registerError.value = ''
   registerDialog.value?.showModal()
 }
 
 // 회원 등록 모달 닫기
 function closeRegisterDialog() {
+  if (isRegistering.value) return
+
   registerDialog.value?.close()
+}
+
+// 등록 중 ESC로 모달이 닫히지 않도록 처리
+function handleCancel(event: Event) {
+  if (isRegistering.value) {
+    event.preventDefault()
+  }
 }
 
 // 입력값 초기화
@@ -55,10 +68,13 @@ function resetForm() {
   }
 
   phoneError.value = ''
+  registerError.value = ''
 }
 
 // 신규 회원 등록
-function submitMember() {
+async function submitMember() {
+  if (isRegistering.value) return
+
   const name = newMember.value.name.trim()
   const phone = normalizePhone(newMember.value.phone)
   const totalSessions = newMember.value.totalSessions
@@ -73,13 +89,17 @@ function submitMember() {
     return
   }
 
-  emit('register', {
+  // Supabase 회원 및 PT 이용권 등록
+  const isSuccess = await memberStore.registerMember({
     name,
     phone,
     totalSessions,
   })
 
-  closeRegisterDialog()
+  // 등록 성공 시 모달 닫기
+  if (isSuccess) {
+    closeRegisterDialog()
+  }
 }
 
 // 부모에서 모달 열기 함수를 사용할 수 있도록 공개
@@ -96,6 +116,7 @@ defineExpose({
     aria-describedby="register-dialog-description"
     class="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-slate-900 shadow-xl backdrop:bg-black/40 sm:p-8"
     @close="resetForm"
+    @cancel="handleCancel"
   >
     <!-- 모달 제목 -->
     <h2 id="register-dialog-title" class="text-xl font-bold text-slate-900">회원 등록</h2>
@@ -165,11 +186,17 @@ defineExpose({
         />
       </div>
 
+      <!-- 회원 등록 오류 메시지 -->
+      <p v-if="registerError" role="alert" class="text-sm text-red-600">
+        {{ registerError }}
+      </p>
+
       <!-- 모달 하단 버튼 -->
       <div class="flex justify-end gap-3 pt-2">
         <button
           type="button"
-          class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          :disabled="isRegistering"
+          class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           @click="closeRegisterDialog"
         >
           취소
@@ -177,9 +204,10 @@ defineExpose({
 
         <button
           type="submit"
-          class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+          :disabled="isRegistering"
+          class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          회원 등록
+          {{ isRegistering ? '등록 중...' : '회원 등록' }}
         </button>
       </div>
     </form>

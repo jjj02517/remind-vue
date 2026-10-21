@@ -6,14 +6,18 @@ import { useQuery } from '@tanstack/vue-query'
 
 import { supabase } from '@/lib/supabase'
 import { formatPhone } from '@/utils/phone'
+import { getMemberStatus } from '@/utils/memberStatus'
+import type { MemberStatus } from '@/utils/memberStatus'
 import AddPtPackageDialog from '@/components/members/AddPtPackageDialog.vue'
 import EditMemberDialog from '@/components/members/EditMemberDialog.vue'
+import PackagePauseHistory from '@/components/members/PackagePauseHistory.vue'
 
 // 회원 상세 화면 데이터 타입
 interface MemberDetailData {
   id: string
   name: string
   phone: string
+  status: MemberStatus
   totalSessions: number | null
   remainingSessions: number | null
 }
@@ -65,7 +69,7 @@ const {
   queryFn: async () => {
     const { data, error } = await supabase
       .from('members')
-      .select('id, name, phone')
+      .select('id, name, phone, status')
       .eq('id', memberId.value)
       .maybeSingle()
 
@@ -124,6 +128,9 @@ const member = computed<MemberDetailData | undefined>(() => {
     return undefined
   }
 
+  // 회원이 보유한 PT 이용권을 기준으로 활동 상태 자동 계산
+  const status = getMemberStatus(dbMember.value.status, dbPtPackages.value ?? [])
+
   // 취소되지 않은 PT 횟수제 이용권만 필터링
   const ptPackages = (dbPtPackages.value ?? []).filter(
     (pkg) => pkg.usage_type === 'count' && pkg.status !== 'cancelled',
@@ -135,6 +142,7 @@ const member = computed<MemberDetailData | undefined>(() => {
       id: dbMember.value.id,
       name: dbMember.value.name,
       phone: dbMember.value.phone,
+      status,
       totalSessions: null,
       remainingSessions: null,
     }
@@ -153,6 +161,7 @@ const member = computed<MemberDetailData | undefined>(() => {
     id: dbMember.value.id,
     name: dbMember.value.name,
     phone: dbMember.value.phone,
+    status,
     totalSessions,
     remainingSessions,
   }
@@ -207,6 +216,28 @@ const usagePercent = computed(() => {
 
   return Math.min(100, Math.round(percent))
 })
+
+// 회원 상태 표시 이름
+function getMemberStatusLabel(status: string) {
+  const statusLabels: Record<string, string> = {
+    active: '활동 중',
+    inactive: '비활성',
+    archived: '보관',
+  }
+
+  return statusLabels[status] ?? '상태 확인 필요'
+}
+
+// 회원 상태별 배지 스타일
+function getMemberStatusClass(status: string) {
+  const statusClasses: Record<string, string> = {
+    active: 'bg-green-50 text-green-700',
+    inactive: 'bg-amber-50 text-amber-700',
+    archived: 'bg-slate-100 text-slate-600',
+  }
+
+  return statusClasses[status] ?? 'bg-slate-100 text-slate-600'
+}
 
 // PT 이용권 상태 표시 이름
 function getPackageStatusLabel(status: string) {
@@ -324,6 +355,17 @@ onMounted(async () => {
             <span class="text-sm text-slate-500">연락처</span>
             <span class="text-sm font-medium text-slate-900">
               {{ formatPhone(member.phone) }}
+            </span>
+          </div>
+
+          <!-- 회원 상태 -->
+          <div class="flex items-center justify-between gap-4">
+            <span class="text-sm text-slate-500">회원 상태</span>
+            <span
+              class="rounded-full px-3 py-1 text-xs font-medium"
+              :class="getMemberStatusClass(member.status)"
+            >
+              {{ getMemberStatusLabel(member.status) }}
             </span>
           </div>
         </div>
@@ -477,6 +519,9 @@ onMounted(async () => {
                   {{ pkg.remaining_sessions }}회
                 </span>
               </div>
+
+              <!-- 이용권별 일시정지 내역 -->
+              <PackagePauseHistory :package-id="pkg.id" />
             </div>
           </div>
         </div>

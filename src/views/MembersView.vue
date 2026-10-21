@@ -14,19 +14,6 @@ const trainerId = ref<string | null>(null)
 // 사용자 정보 조회 오류
 const authError = ref('')
 
-// 회원 관리 페이지 진입 시 로그인한 사용자 확인
-onMounted(async () => {
-  const { data, error } = await supabase.auth.getSession()
-
-  if (error) {
-    console.error('사용자 정보 조회 오류:', error.message)
-    authError.value = '사용자 정보를 확인하지 못했습니다.'
-    return
-  }
-
-  trainerId.value = data.session?.user.id ?? null
-})
-
 // TanStack Query로 Supabase 회원 목록 조회
 const {
   data: dbMembers,
@@ -84,6 +71,19 @@ const registerDialog = ref<InstanceType<typeof MemberRegisterDialog> | null>(nul
 function openRegisterDialog() {
   registerDialog.value?.open()
 }
+
+// 회원 관리 페이지 진입 시 로그인한 사용자 확인
+onMounted(async () => {
+  const { data, error } = await supabase.auth.getSession()
+
+  if (error) {
+    console.error('사용자 정보 조회 오류:', error.message)
+    authError.value = '사용자 정보를 확인하지 못했습니다.'
+    return
+  }
+
+  trainerId.value = data.session?.user.id ?? null
+})
 </script>
 
 <template>

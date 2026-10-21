@@ -1,10 +1,13 @@
 import { supabase } from '@/lib/supabase'
+import { getMemberStatus } from '@/utils/memberStatus'
+import type { MemberStatus } from '@/utils/memberStatus'
 
 // 회원 목록에서 사용하는 데이터 타입
 export interface MemberListData {
   id: string
   name: string
   phone: string
+  status: MemberStatus
   totalSessions: number | null
   remainingSessions: number | null
 }
@@ -19,6 +22,7 @@ export async function getMembers(): Promise<MemberListData[]> {
       id,
       name,
       phone,
+      status,
       member_packages (
         package_type,
         usage_type,
@@ -37,6 +41,9 @@ export async function getMembers(): Promise<MemberListData[]> {
 
   // 회원별 PT 횟수 계산
   return (data ?? []).map((member) => {
+    // 회원이 보유한 이용권을 기준으로 활동 상태 자동 계산
+    const status = getMemberStatus(member.status, member.member_packages)
+
     // 취소되지 않은 PT 횟수제 이용권만 필터링
     const ptPackages = member.member_packages.filter(
       (pkg) =>
@@ -49,6 +56,7 @@ export async function getMembers(): Promise<MemberListData[]> {
         id: member.id,
         name: member.name,
         phone: member.phone,
+        status,
         totalSessions: null,
         remainingSessions: null,
       }
@@ -67,6 +75,7 @@ export async function getMembers(): Promise<MemberListData[]> {
       id: member.id,
       name: member.name,
       phone: member.phone,
+      status,
       totalSessions,
       remainingSessions,
     }

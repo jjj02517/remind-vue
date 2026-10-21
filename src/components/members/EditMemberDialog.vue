@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
+
 import { supabase } from '@/lib/supabase'
 import { formatPhone, isValidPhone, normalizePhone } from '@/utils/phone'
+import { useMemberDuplicateCheck } from '@/composables/useMemberDuplicateCheck'
 
 // 부모 컴포넌트에서 회원 정보 전달받기
 const props = defineProps<{
@@ -27,35 +29,36 @@ const editMember = ref({
 const originalName = ref('')
 const originalPhone = ref('')
 
-// 회원명 중복 경고
-const nameWarning = ref('')
-
-// 중복 회원명 확인 여부
-const isNameDuplicateConfirmed = ref(false)
-
-// 회원명 중복 검사 진행 상태
-const isCheckingName = ref(false)
-
-// 중복 검사 완료된 회원명
-const checkedName = ref('')
-
-// 이전 이름 검사 결과를 무시하기 위한 요청 번호
-let nameCheckId = 0
-
-// 연락처 검사 오류
-const phoneError = ref('')
-
 // 회원 수정 오류
 const editError = ref('')
 
-// 연락처 중복 검사 상태
-const isCheckingPhone = ref(false)
+// 회원명 및 연락처 중복 검사 상태 관리
+const {
+  nameWarning,
+  nameCheckError,
+  isNameDuplicateConfirmed,
+  checkedName,
+  phoneError,
+  phoneCheckError,
+  checkedPhone,
+  isChecking,
+  checkNameDuplicate,
+  checkPhoneDuplicate,
+  resetNameCheck,
+  resetPhoneCheck,
+  resetDuplicateCheck,
+} = useMemberDuplicateCheck({
+  // 현재 수정 중인 회원 정보
+  getName: () => editMember.value.name,
+  getPhone: () => editMember.value.phone,
 
-// 중복 확인이 완료된 연락처
-const checkedPhone = ref('')
+  // 기존 회원 정보
+  getOriginalName: () => originalName.value,
+  getOriginalPhone: () => originalPhone.value,
 
-// 이전 검사 응답을 구분하는 번호
-let phoneCheckId = 0
+  // 본인 회원 ID는 중복 검사 대상에서 제외
+  excludeMemberId: props.memberId,
+})
 
 // Supabase 회원 정보 수정 Mutation
 const { mutateAsync: updateMember, isPending: isUpdating } = useMutation({
@@ -89,8 +92,14 @@ const { mutateAsync: updateMember, isPending: isUpdating } = useMutation({
   },
 })
 
+// 수정 요청 진행 상태
+const isSubmitting = ref(false)
+
 // 수정 또는 검사 진행 상태
-const isBusy = computed(() => isUpdating.value || isCheckingName.value || isCheckingPhone.value)
+const isBusy = computed(() => isSubmitting.value || isUpdating.value || isChecking.value)
+
+// 회원 정보 수정 오류 메시지 통합
+const formError = computed(() => editError.value || nameCheckError.value || phoneCheckError.value)
 
 // 수정 내용이 있는지 확인
 const hasChanges = computed(() => {
@@ -134,6 +143,9 @@ const isSubmitDisabled = computed(() => {
   // 현재 연락처의 중복 검사가 완료되지 않은 경우
   if (checkedPhone.value !== phone) return true
 
+  // 중복 검사 또는 수정 오류 발생
+  if (formError.value) return true
+
   return false
 })
 
@@ -147,19 +159,13 @@ function openEditDialog() {
     phone: formatPhone(originalPhone.value),
   }
 
-  // 회원명 중복 검사 상태 초기화
-  nameCheckId++
-  nameWarning.value = ''
-  isNameDuplicateConfirmed.value = false
-  isCheckingName.value = false
-  checkedName.value = originalName.value
-
-  phoneError.value = ''
   editError.value = ''
 
-  // 기존 연락처는 이미 본인의 등록된 번호이므로 사용 가능
-  phoneCheckId++
-  isCheckingPhone.value = false
+  // 기존 중복 검사 상태 초기화
+  resetDuplicateCheck()
+
+  // 기존 회원명과 연락처는 이미 사용 중인 본인 정보
+  checkedName.value = originalName.value
   checkedPhone.value = originalPhone.value
 
   editDialog.value?.showModal()
@@ -181,72 +187,13 @@ function handleCancel(event: Event) {
 
 // 회원명 입력 시 경고 초기화
 function handleNameInput() {
-  // 기존 이름 중복 검사 결과 무효화
-  nameCheckId++
-  checkedName.value = ''
-  isCheckingName.value = false
-
-  // 중복 경고 및 확인 상태 초기화
-  nameWarning.value = ''
-  isNameDuplicateConfirmed.value = false
+  // 기존 이름 중복 검사 상태 초기화
+  resetNameCheck()
   editError.value = ''
-}
 
-// 회원명 중복 검사
-async function checkNameDuplicate(): Promise<boolean | null> {
-  const name = editMember.value.name.trim()
-  const requestId = ++nameCheckId
-
-  // 기존 검사 결과 초기화
-  checkedName.value = ''
-  nameWarning.value = ''
-
-  if (!name) return null
-
-  // 기존 회원명을 변경하지 않은 경우
-  if (name === originalName.value) {
-    checkedName.value = name
-    return false
-  }
-
-  isCheckingName.value = true
-
-  try {
-    // 공백과 대소문자를 무시하고 회원명 중복 검사
-    // 현재 회원 본인은 검사 대상에서 제외
-    const { data: isDuplicate, error } = await supabase.rpc('check_member_name_duplicate', {
-      p_name: name,
-      p_exclude_member_id: props.memberId,
-    })
-
-    if (error) throw error
-
-    // 검사 중 이름이 변경됐다면 이전 결과 무시
-    if (requestId !== nameCheckId || name !== editMember.value.name.trim()) {
-      return null
-    }
-
-    // 검사 완료된 회원명 저장
-    checkedName.value = name
-
-    // 다른 회원과 이름이 중복되는 경우
-    if (isDuplicate === true) {
-      nameWarning.value = '이미 같은 이름의 회원이 있습니다. 동명이인인지 확인해 주세요.'
-    }
-
-    return isDuplicate === true
-  } catch (error) {
-    console.error('회원명 중복 검사 오류:', error)
-
-    if (requestId === nameCheckId) {
-      editError.value = '회원명 중복 확인 중 문제가 발생했습니다.'
-    }
-
-    return null
-  } finally {
-    if (requestId === nameCheckId) {
-      isCheckingName.value = false
-    }
+  // 기존 이름으로 돌아오면 다시 검사할 필요 없음
+  if (editMember.value.name.trim() === originalName.value) {
+    checkedName.value = originalName.value
   }
 }
 
@@ -258,11 +205,8 @@ function handlePhoneInput(event: Event) {
   input.value = formattedPhone
   editMember.value.phone = formattedPhone
 
-  // 기존 중복 검사 결과 초기화
-  phoneCheckId++
-  checkedPhone.value = ''
-  isCheckingPhone.value = false
-  phoneError.value = ''
+  // 기존 연락처 중복 검사 결과 초기화
+  resetPhoneCheck()
   editError.value = ''
 
   const phone = normalizePhone(formattedPhone)
@@ -279,67 +223,6 @@ function handlePhoneInput(event: Event) {
   }
 }
 
-// 연락처 중복 검사
-async function checkPhoneDuplicate(): Promise<boolean> {
-  const phone = normalizePhone(editMember.value.phone)
-  const requestId = ++phoneCheckId
-
-  checkedPhone.value = ''
-  phoneError.value = ''
-
-  if (!isValidPhone(phone)) {
-    phoneError.value = '010으로 시작하는 11자리 휴대폰 번호를 입력해 주세요.'
-    return false
-  }
-
-  // 기존 본인 연락처는 중복 검사 대상에서 제외
-  if (phone === originalPhone.value) {
-    checkedPhone.value = phone
-    return true
-  }
-
-  isCheckingPhone.value = true
-
-  try {
-    // 본인을 제외한 동일한 연락처의 회원 조회
-    const { data, error } = await supabase
-      .from('members')
-      .select('id')
-      .eq('phone', phone)
-      .neq('id', props.memberId)
-      .limit(1)
-
-    if (error) throw error
-
-    // 검사 중 연락처가 변경되었다면 이전 결과 무시
-    if (requestId !== phoneCheckId || phone !== normalizePhone(editMember.value.phone)) {
-      return false
-    }
-
-    // 다른 회원이 사용 중인 연락처
-    if (data && data.length > 0) {
-      phoneError.value = '이미 다른 회원이 사용 중인 연락처입니다.'
-      return false
-    }
-
-    // 사용 가능한 연락처로 확인 완료
-    checkedPhone.value = phone
-    return true
-  } catch (error) {
-    console.error('연락처 중복 검사 오류:', error)
-
-    if (requestId === phoneCheckId) {
-      editError.value = '연락처 중복 확인 중 문제가 발생했습니다.'
-    }
-
-    return false
-  } finally {
-    if (requestId === phoneCheckId) {
-      isCheckingPhone.value = false
-    }
-  }
-}
-
 // 회원 정보 수정
 async function submitEdit() {
   if (isSubmitDisabled.value) return
@@ -348,13 +231,16 @@ async function submitEdit() {
   const phone = normalizePhone(editMember.value.phone)
 
   editError.value = ''
+  isSubmitting.value = true
+
+  let isSuccess = false
 
   try {
     // 저장 직전 회원명 중복 재검사
     const isNameDuplicate = await checkNameDuplicate()
 
     // 회원명 검사 실패 시 수정 중단
-    if (isNameDuplicate === null) return
+    if (isNameDuplicate === null || nameCheckError.value) return
 
     // 중복 이름을 확인하지 않았다면 수정 중단
     if (isNameDuplicate && !isNameDuplicateConfirmed.value) {
@@ -364,13 +250,13 @@ async function submitEdit() {
     // 저장 직전 연락처 중복 재검사
     const isPhoneAvailable = await checkPhoneDuplicate()
 
-    if (!isPhoneAvailable || editError.value) return
+    // 연락처 검사 실패 시 수정 중단
+    if (!isPhoneAvailable || phoneCheckError.value) return
 
     // Supabase 회원 정보 수정
     await updateMember({ name, phone })
 
-    // 수정 성공 시 모달 닫기
-    closeEditDialog()
+    isSuccess = true
   } catch (error) {
     console.error('회원 정보 수정 오류:', error)
 
@@ -380,6 +266,13 @@ async function submitEdit() {
     } else {
       editError.value = '회원 정보 수정에 실패했습니다.'
     }
+  } finally {
+    isSubmitting.value = false
+  }
+
+  // 수정 성공 시 모달 닫기
+  if (isSuccess) {
+    closeEditDialog()
   }
 }
 
@@ -469,8 +362,8 @@ defineExpose({
       </div>
 
       <!-- 회원 정보 수정 오류 -->
-      <p v-if="editError" role="alert" class="text-sm text-red-600">
-        {{ editError }}
+      <p v-if="formError" role="alert" class="text-sm text-red-600">
+        {{ formError }}
       </p>
 
       <!-- 모달 하단 버튼 -->

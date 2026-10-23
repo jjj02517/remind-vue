@@ -1,3 +1,4 @@
+import { getTodayString } from '@/utils/date'
 import { isPackagePaused } from '@/utils/packagePauseStatus'
 import type { PackagePause } from '@/api/packagePauses'
 
@@ -15,17 +16,6 @@ interface MemberPackage {
 
   // 해당 이용권의 일시정지 내역
   package_pauses?: PackagePause[] | null
-}
-
-// 오늘 날짜를 YYYY-MM-DD 형식으로 반환
-function getTodayString(): string {
-  const now = new Date()
-
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
 }
 
 // 이용권의 현재 사용 가능 여부 확인

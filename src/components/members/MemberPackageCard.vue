@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import PackagePauseHistory from '@/components/members/PackagePauseHistory.vue'
 import { useQuery } from '@tanstack/vue-query'
 import { getPackagePauses } from '@/api/packagePauses'
+import { getTodayString } from '@/utils/date'
 import { isPackagePaused } from '@/utils/packagePauseStatus'
+import PausePackageDialog from '@/components/members/dialogs/PausePackageDialog.vue'
 
 // 이용권 데이터 타입
 interface MemberPackage {
@@ -23,6 +25,32 @@ interface MemberPackage {
 const props = defineProps<{
   pkg: MemberPackage
 }>()
+
+// 이용권 일시정지 모달 컴포넌트 참조
+const pauseDialog = ref<InstanceType<typeof PausePackageDialog> | null>(null)
+
+// 일시정지 등록 가능한 이용권인지 확인
+const canPausePackage = computed(() => {
+  const pkg = props.pkg
+
+  // 우선 기간제 월 회원권만 일시정지 지원
+  if (pkg.package_type !== 'membership') return false
+  if (pkg.usage_type !== 'period') return false
+
+  // 정상 등록된 활성 이용권만 허용
+  if (pkg.status !== 'active') return false
+
+  // 이용 기간 정보 필수
+  if (!pkg.starts_on || !pkg.ends_on) return false
+
+  // 이미 만료된 회원권은 일시정지 불가
+  return pkg.ends_on >= getTodayString()
+})
+
+// 일시정지 모달 열기
+function openPauseDialog() {
+  pauseDialog.value?.open()
+}
 
 // 이용권별 일시정지 내역 조회
 const {
@@ -44,16 +72,6 @@ const {
 const isPaused = computed(() => {
   return isPackagePaused(packagePauses.value ?? [], getTodayString())
 })
-
-// 브라우저 현지 날짜를 YYYY-MM-DD로 반환
-function getTodayString(): string {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
-}
 
 // 날짜 표시 형식
 function formatDate(date: string | null): string {
@@ -330,7 +348,21 @@ const sessionLabel = computed(() => {
       </div>
     </div>
 
+    <!-- 이용권 일시정지 등록 -->
+    <div v-if="canPausePackage" class="mt-5 flex justify-end">
+      <button
+        type="button"
+        class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700 transition hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-amber-500"
+        @click="openPauseDialog"
+      >
+        일시정지 등록
+      </button>
+    </div>
+
     <!-- 이용권별 일시정지 내역 -->
     <PackagePauseHistory :package-id="pkg.id" />
+
+    <!-- 이용권 일시정지 등록 모달 -->
+    <PausePackageDialog v-if="canPausePackage" ref="pauseDialog" :package-id="pkg.id" />
   </div>
 </template>

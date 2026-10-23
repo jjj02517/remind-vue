@@ -5,6 +5,7 @@ import { ArrowLeft } from 'lucide-vue-next'
 import { useQuery } from '@tanstack/vue-query'
 
 import { supabase } from '@/lib/supabase'
+import { getTodayString } from '@/utils/date'
 import { formatPhone } from '@/utils/phone'
 import { getMemberStatus } from '@/utils/memberStatus'
 import type { MemberStatus } from '@/utils/memberStatus'
@@ -151,16 +152,6 @@ const member = computed<MemberDetailData | undefined>(() => {
     status,
   }
 })
-
-// 브라우저 현지 날짜를 YYYY-MM-DD로 반환
-function getTodayString(): string {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
-}
 
 // 현재 또는 이용 예정 이용권 여부 판단
 // 완료·만료·취소된 이용권은 지난 내역으로 분리

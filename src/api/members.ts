@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { getTodayString } from '@/utils/date'
 import { getMemberStatus } from '@/utils/memberStatus'
 import { isPackagePaused } from '@/utils/packagePauseStatus'
 
@@ -30,17 +31,6 @@ export interface MemberListData {
 
   // 회원이 보유한 현재 및 예정 이용권
   packages: MemberListPackage[]
-}
-
-// 오늘 날짜를 YYYY-MM-DD 형식으로 반환
-function getTodayString(): string {
-  const now = new Date()
-
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
 }
 
 // Supabase 회원 목록 조회

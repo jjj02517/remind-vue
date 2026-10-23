@@ -8,9 +8,10 @@ import { supabase } from '@/lib/supabase'
 import { formatPhone } from '@/utils/phone'
 import { getMemberStatus } from '@/utils/memberStatus'
 import type { MemberStatus } from '@/utils/memberStatus'
-import AddPtPackageDialog from '@/components/members/AddPtPackageDialog.vue'
-import EditMemberDialog from '@/components/members/EditMemberDialog.vue'
-import PackagePauseHistory from '@/components/members/PackagePauseHistory.vue'
+
+import MemberPackageCard from '@/components/members/MemberPackageCard.vue'
+import AddPackageDialog from '@/components/members/dialogs/AddPackageDialog.vue'
+import EditMemberDialog from '@/components/members/dialogs/EditMemberDialog.vue'
 
 // 회원 상세 화면 데이터 타입
 interface MemberDetailData {
@@ -18,8 +19,6 @@ interface MemberDetailData {
   name: string
   phone: string
   status: MemberStatus
-  totalSessions: number | null
-  remainingSessions: number | null
 }
 
 // 현재 페이지의 라우트 정보
@@ -33,10 +32,10 @@ const isValidMemberId = computed(() =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(memberId.value),
 )
 
-// PT 이용권 추가 모달 컴포넌트 참조
-const packageDialog = ref<InstanceType<typeof AddPtPackageDialog> | null>(null)
+// 공통 이용권 추가 모달 컴포넌트 참조
+const packageDialog = ref<InstanceType<typeof AddPackageDialog> | null>(null)
 
-// PT 이용권 추가 모달 열기
+// 공통 이용권 추가 모달 열기
 function openPackageDialog() {
   packageDialog.value?.open()
 }
@@ -73,9 +72,7 @@ const {
       .eq('id', memberId.value)
       .maybeSingle()
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
     return data
   },
@@ -87,29 +84,47 @@ const {
   staleTime: 1000 * 60 * 5,
 })
 
-// TanStack Query로 회원별 PT 이용권 조회
+// TanStack Query로 회원별 전체 이용권 조회
 const {
-  data: dbPtPackages,
+  data: dbPackages,
   isPending: isPackagesLoading,
   error: packagesError,
 } = useQuery({
   // 회원별 이용권 캐시 구분
   queryKey: computed(() => ['member-packages', memberId.value, trainerId.value]),
 
-  // Supabase에서 해당 회원의 PT 이용권 조회
+  // Supabase에서 해당 회원의 모든 이용권과 일시정지 내역 조회
   queryFn: async () => {
     const { data, error } = await supabase
       .from('member_packages')
       .select(
-        'id, member_id, package_type, usage_type, total_sessions, remaining_sessions, starts_on, ends_on, status, created_at',
+        `
+        id,
+        member_id,
+        package_type,
+        usage_type,
+        total_sessions,
+        remaining_sessions,
+        starts_on,
+        ends_on,
+        status,
+        created_at,
+        package_pauses (
+          id,
+          package_id,
+          starts_on,
+          ends_on,
+          resumed_on,
+          cancelled_at,
+          reason,
+          created_at
+        )
+      `,
       )
       .eq('member_id', memberId.value)
-      .eq('package_type', 'pt')
       .order('created_at', { ascending: false })
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
     return data ?? []
   },
@@ -124,48 +139,76 @@ const {
 // 회원 ID로 회원 정보 조회
 const member = computed<MemberDetailData | undefined>(() => {
   // Supabase 회원 정보가 없는 경우
-  if (!dbMember.value) {
-    return undefined
-  }
+  if (!dbMember.value) return undefined
 
-  // 회원이 보유한 PT 이용권을 기준으로 활동 상태 자동 계산
-  const status = getMemberStatus(dbMember.value.status, dbPtPackages.value ?? [])
-
-  // 취소되지 않은 PT 횟수제 이용권만 필터링
-  const ptPackages = (dbPtPackages.value ?? []).filter(
-    (pkg) => pkg.usage_type === 'count' && pkg.status !== 'cancelled',
-  )
-
-  // PT 이용권 정보가 없는 경우
-  if (ptPackages.length === 0) {
-    return {
-      id: dbMember.value.id,
-      name: dbMember.value.name,
-      phone: dbMember.value.phone,
-      status,
-      totalSessions: null,
-      remainingSessions: null,
-    }
-  }
-
-  // 총 PT 횟수 합산
-  const totalSessions = ptPackages.reduce((total, pkg) => total + (pkg.total_sessions ?? 0), 0)
-
-  // 이용 중인 PT의 잔여 횟수 합산
-  const remainingSessions = ptPackages.reduce(
-    (total, pkg) => total + (pkg.status === 'active' ? (pkg.remaining_sessions ?? 0) : 0),
-    0,
-  )
+  // 모든 이용권의 상태, 이용 기간, 일시정지 내역으로 활동 상태 계산
+  const status = getMemberStatus(dbMember.value.status, dbPackages.value ?? [])
 
   return {
     id: dbMember.value.id,
     name: dbMember.value.name,
     phone: dbMember.value.phone,
     status,
-    totalSessions,
-    remainingSessions,
   }
 })
+
+// 브라우저 현지 날짜를 YYYY-MM-DD로 반환
+function getTodayString(): string {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+// 현재 또는 이용 예정 이용권 여부 판단
+// 완료·만료·취소된 이용권은 지난 내역으로 분리
+function isCurrentPackage(
+  pkg: {
+    status: string
+    usage_type: string
+    remaining_sessions: number | null
+    starts_on: string | null
+    ends_on: string | null
+  },
+  today: string,
+): boolean {
+  if (pkg.status !== 'active') return false
+
+  // 기간이 끝난 이용권은 DB 상태가 active여도 지난 이용권으로 분류
+  if (pkg.ends_on && pkg.ends_on < today) return false
+
+  // 횟수제는 잔여 횟수가 있어야 현재 이용권으로 분류
+  if (pkg.usage_type === 'count') {
+    return (pkg.remaining_sessions ?? 0) > 0
+  }
+
+  // 기간제는 이용 시작 전이라도 만료 전이면 현재·예정에 포함
+  if (pkg.usage_type === 'period') {
+    return !!pkg.starts_on && !!pkg.ends_on
+  }
+
+  return false
+}
+
+// 현재 이용권과 이용 예정 이용권
+// 일시정지 중인 이용권도 이 목록에 남김
+const currentPackages = computed(() => {
+  const today = getTodayString()
+
+  return (dbPackages.value ?? []).filter((pkg) => isCurrentPackage(pkg, today))
+})
+
+// 사용 완료·기간 만료·취소된 지난 이용권
+const pastPackages = computed(() => {
+  const today = getTodayString()
+
+  return (dbPackages.value ?? []).filter((pkg) => !isCurrentPackage(pkg, today))
+})
+
+// 지난 이용권 펼침 상태
+const showPastPackages = ref(false)
 
 // 회원 정보 조회 상태
 const isDetailLoading = computed(() => {
@@ -178,7 +221,7 @@ const isDetailLoading = computed(() => {
   // 로그인한 트레이너 정보가 없는 경우
   if (!trainerId.value) return false
 
-  // 회원 정보 및 PT 이용권 조회 중
+  // 회원 정보 및 이용권 조회 중
   return isMemberLoading.value || isPackagesLoading.value
 })
 
@@ -186,76 +229,30 @@ const isDetailLoading = computed(() => {
 const detailError = computed(() => {
   if (authError.value) return authError.value
   if (memberError.value) return '회원 정보를 불러오지 못했습니다.'
-  if (packagesError.value) return 'PT 이용권을 불러오지 못했습니다.'
-
+  if (packagesError.value) return '이용권을 불러오지 못했습니다.'
   return ''
 })
 
-// PT 이용권 정보 유무
-const hasPtData = computed(() => {
-  return (
-    typeof member.value?.totalSessions === 'number' &&
-    typeof member.value?.remainingSessions === 'number'
-  )
-})
-
-// 사용한 PT 횟수
-const usedSessions = computed(() => {
-  if (!member.value || !hasPtData.value) return 0
-
-  return Math.max(0, (member.value.totalSessions ?? 0) - (member.value.remainingSessions ?? 0))
-})
-
-// PT 사용 진행률 (%)
-const usagePercent = computed(() => {
-  const totalSessions = member.value?.totalSessions ?? 0
-
-  if (!hasPtData.value || totalSessions <= 0) return 0
-
-  const percent = (usedSessions.value / totalSessions) * 100
-
-  return Math.min(100, Math.round(percent))
-})
-
 // 회원 상태 표시 이름
-function getMemberStatusLabel(status: string) {
-  const statusLabels: Record<string, string> = {
+function getMemberStatusLabel(status: MemberStatus) {
+  const statusLabels: Record<MemberStatus, string> = {
     active: '활동 중',
     inactive: '비활성',
     archived: '보관',
   }
 
-  return statusLabels[status] ?? '상태 확인 필요'
+  return statusLabels[status]
 }
 
 // 회원 상태별 배지 스타일
-function getMemberStatusClass(status: string) {
-  const statusClasses: Record<string, string> = {
+function getMemberStatusClass(status: MemberStatus) {
+  const statusClasses: Record<MemberStatus, string> = {
     active: 'bg-green-50 text-green-700',
     inactive: 'bg-amber-50 text-amber-700',
     archived: 'bg-slate-100 text-slate-600',
   }
 
-  return statusClasses[status] ?? 'bg-slate-100 text-slate-600'
-}
-
-// PT 이용권 상태 표시 이름
-function getPackageStatusLabel(status: string) {
-  const statusLabels: Record<string, string> = {
-    active: '이용 중',
-    completed: '사용 완료',
-    expired: '기간 만료',
-    cancelled: '취소',
-  }
-
-  return statusLabels[status] ?? '상태 확인 필요'
-}
-
-// 날짜 표시 형식
-function formatDate(date: string | null) {
-  if (!date) return '미설정'
-
-  return date.slice(0, 10).replaceAll('-', '.')
+  return statusClasses[status]
 }
 
 // 회원 상세 페이지 진입 시 로그인한 사용자 확인
@@ -269,9 +266,7 @@ onMounted(async () => {
   try {
     const { data, error } = await supabase.auth.getSession()
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
     trainerId.value = data.session?.user.id ?? null
 
@@ -317,19 +312,28 @@ onMounted(async () => {
 
     <!-- 회원 정보가 있는 경우 -->
     <template v-else-if="member">
-      <!-- 페이지 제목 -->
-      <h1 class="mt-6 text-2xl font-bold text-slate-900 sm:text-3xl">
-        {{ member.name }}
-      </h1>
+      <!-- 회원 기본 정보 -->
+      <section class="mt-6 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <!-- 회원명 및 상태 -->
+            <div class="flex flex-wrap items-center gap-3">
+              <h1 class="text-2xl font-bold text-slate-900 sm:text-3xl">
+                {{ member.name }}
+              </h1>
+              <span
+                class="rounded-full px-3 py-1 text-xs font-medium"
+                :class="getMemberStatusClass(member.status)"
+              >
+                {{ getMemberStatusLabel(member.status) }}
+              </span>
+            </div>
 
-      <!-- 페이지 설명 -->
-      <p class="mt-2 text-slate-500">회원 정보와 PT 이용 현황을 확인합니다.</p>
-
-      <!-- 회원 정보 -->
-      <div class="mt-8 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <!-- 회원 정보 제목 및 수정 버튼 -->
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <h2 class="text-lg font-semibold text-slate-900">기본 정보</h2>
+            <!-- 연락처 -->
+            <p class="mt-2 text-sm text-slate-500">
+              {{ formatPhone(member.phone) }}
+            </p>
+          </div>
 
           <!-- 회원 정보 수정 -->
           <button
@@ -340,195 +344,95 @@ onMounted(async () => {
             정보 수정
           </button>
         </div>
+      </section>
 
-        <div class="mt-5 space-y-4">
-          <!-- 회원명 -->
-          <div class="flex items-center justify-between gap-4">
-            <span class="text-sm text-slate-500">회원명</span>
-            <span class="text-sm font-medium text-slate-900">
-              {{ member.name }}
-            </span>
-          </div>
-
-          <!-- 연락처 -->
-          <div class="flex items-center justify-between gap-4">
-            <span class="text-sm text-slate-500">연락처</span>
-            <span class="text-sm font-medium text-slate-900">
-              {{ formatPhone(member.phone) }}
-            </span>
-          </div>
-
-          <!-- 회원 상태 -->
-          <div class="flex items-center justify-between gap-4">
-            <span class="text-sm text-slate-500">회원 상태</span>
-            <span
-              class="rounded-full px-3 py-1 text-xs font-medium"
-              :class="getMemberStatusClass(member.status)"
-            >
-              {{ getMemberStatusLabel(member.status) }}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- PT 이용 현황 -->
-      <div class="mt-6 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <!-- PT 이용 현황 제목 및 이용권 추가 버튼 -->
+      <!-- 회원별 이용권 목록 -->
+      <section class="mt-6">
+        <!-- 이용권 내역 제목 및 이용권 추가 버튼 -->
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <h2 class="text-lg font-semibold text-slate-900">PT 이용 현황</h2>
+          <div>
+            <h2 class="text-lg font-semibold text-slate-900">보유 이용권</h2>
+            <p class="mt-1 text-sm text-slate-500">
+              PT, 그룹 수업, 월 회원권을 이용권별로 관리합니다.
+            </p>
+          </div>
 
-          <!-- PT 이용권 추가 -->
+          <!-- 공통 이용권 추가 버튼 -->
           <button
             type="button"
-            class="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
+            class="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
             @click="openPackageDialog"
           >
-            + PT 이용권 추가
+            + 이용권 추가
           </button>
         </div>
 
-        <div class="mt-5 grid grid-cols-2 gap-4">
-          <!-- 총 PT -->
-          <div class="rounded-lg bg-slate-50 p-4">
-            <p class="text-sm text-slate-500">총 PT</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900">
-              {{ member.totalSessions === null ? '—' : `${member.totalSessions}회` }}
-            </p>
-          </div>
-
-          <!-- 잔여 PT -->
-          <div class="rounded-lg bg-blue-50 p-4">
-            <p class="text-sm text-blue-600">잔여 PT</p>
-            <p class="mt-2 text-2xl font-bold text-blue-600">
-              {{ member.remainingSessions === null ? '—' : `${member.remainingSessions}회` }}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <!-- PT 사용 진행률 -->
-      <div v-if="hasPtData" class="mt-6">
-        <div class="mb-3 flex items-center justify-between">
-          <h3 class="text-sm font-medium text-slate-700">PT 사용 진행률</h3>
-          <span class="text-sm font-semibold text-blue-600"> {{ usagePercent }}% </span>
-        </div>
-
-        <!-- 진행률 바 -->
-        <div
-          role="progressbar"
-          aria-label="PT 사용 진행률"
-          :aria-valuenow="usagePercent"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          class="h-3 overflow-hidden rounded-full bg-slate-200"
-        >
-          <div
-            class="h-full rounded-full bg-blue-600 transition-all duration-300"
-            :style="{ width: `${usagePercent}%` }"
-          ></div>
-        </div>
-
-        <!-- 사용 및 잔여 PT 안내 -->
-        <div class="mt-3 flex items-center justify-between gap-3 text-xs sm:text-sm">
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-blue-600"></span>
-            <span class="text-slate-600">사용 {{ usedSessions }}회</span>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-slate-200"></span>
-            <span class="text-slate-600">
-              잔여
-              {{ member.remainingSessions === null ? '—' : `${member.remainingSessions}회` }}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- PT 이용권 내역 -->
-      <div class="mt-6 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
-        <!-- 이용권 내역 제목 -->
-        <h2 class="text-lg font-semibold text-slate-900">PT 이용권 내역</h2>
-
-        <!-- 이용권 조회 중 -->
-        <p v-if="isPackagesLoading" class="mt-5 text-sm text-slate-500">
-          PT 이용권을 불러오는 중...
-        </p>
-
-        <!-- 이용권 조회 오류 -->
-        <p v-else-if="packagesError" role="alert" class="mt-5 text-sm text-red-600">
-          PT 이용권 목록을 불러오지 못했습니다.
-        </p>
-
         <!-- 등록된 이용권 없음 -->
-        <p v-else-if="!dbPtPackages?.length" class="mt-5 text-sm text-slate-500">
-          등록된 PT 이용권이 없습니다.
-        </p>
+        <div
+          v-if="!dbPackages?.length"
+          class="mt-5 rounded-xl border border-slate-200 bg-white px-6 py-12 text-center"
+        >
+          <p class="text-sm text-slate-500">등록된 이용권이 없습니다.</p>
+        </div>
 
-        <!-- PT 이용권 목록 -->
-        <div v-else class="mt-5 space-y-3">
-          <div
-            v-for="pkg in dbPtPackages"
-            :key="pkg.id"
-            class="rounded-lg border border-slate-200 p-4"
-          >
-            <!-- 이용권명 및 상태 -->
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <h3 class="font-semibold text-slate-900">PT {{ pkg.total_sessions }}회권</h3>
-
-              <span
-                class="rounded-full px-3 py-1 text-xs font-medium"
-                :class="
-                  pkg.status === 'active'
-                    ? 'bg-green-50 text-green-700'
-                    : 'bg-slate-100 text-slate-600'
-                "
-              >
-                {{ getPackageStatusLabel(pkg.status) }}
+        <template v-else>
+          <!-- 현재 및 이용 예정 이용권 -->
+          <div class="mt-6">
+            <div class="flex flex-wrap items-center gap-2">
+              <h3 class="text-base font-semibold text-slate-900">현재·예정 이용권</h3>
+              <span class="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                {{ currentPackages.length }}개
               </span>
             </div>
 
-            <!-- 이용권 상세 정보 -->
-            <div class="mt-4 space-y-3">
-              <!-- 구매일 -->
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-sm text-slate-500">등록일</span>
-                <span class="text-sm text-slate-800">
-                  {{ formatDate(pkg.created_at) }}
-                </span>
-              </div>
+            <!-- 현재 및 이용 예정 이용권이 없는 경우 -->
+            <div
+              v-if="currentPackages.length === 0"
+              class="mt-4 rounded-xl border border-slate-200 bg-white px-6 py-10 text-center"
+            >
+              <p class="text-sm text-slate-500">현재 이용 중이거나 예정된 이용권이 없습니다.</p>
+            </div>
 
-              <!-- 개시일 -->
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-sm text-slate-500">개시일</span>
-                <span class="text-sm text-slate-800">
-                  {{ formatDate(pkg.starts_on) }}
-                </span>
-              </div>
-
-              <!-- 총 PT -->
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-sm text-slate-500">총 PT</span>
-                <span class="text-sm font-medium text-slate-800"> {{ pkg.total_sessions }}회 </span>
-              </div>
-
-              <!-- 잔여 PT -->
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-sm text-slate-500">잔여 PT</span>
-                <span class="text-sm font-semibold text-blue-600">
-                  {{ pkg.remaining_sessions }}회
-                </span>
-              </div>
-
-              <!-- 이용권별 일시정지 내역 -->
-              <PackagePauseHistory :package-id="pkg.id" />
+            <!-- 현재 및 이용 예정 이용권 카드 -->
+            <div v-else class="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+              <MemberPackageCard v-for="pkg in currentPackages" :key="pkg.id" :pkg="pkg" />
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- PT 이용권 추가 모달 -->
-      <AddPtPackageDialog ref="packageDialog" :member-id="member.id" />
+          <!-- 지난 이용권 목록: 필요할 때만 펼쳐보기 -->
+          <div v-if="pastPackages.length > 0" class="mt-8 border-t border-slate-200 pt-6">
+            <button
+              type="button"
+              class="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-blue-600"
+              :aria-expanded="showPastPackages"
+              @click="showPastPackages = !showPastPackages"
+            >
+              <span class="flex flex-wrap items-center gap-2">
+                <span class="text-base font-semibold text-slate-800">지난 이용권</span>
+                <span
+                  class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"
+                >
+                  {{ pastPackages.length }}개
+                </span>
+              </span>
+              <span class="text-sm font-medium text-slate-500">
+                {{ showPastPackages ? '접기 ▲' : '펼치기 ▼' }}
+              </span>
+            </button>
+
+            <!-- 지난 이용권 카드 목록 -->
+            <div
+              v-if="showPastPackages"
+              class="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-2"
+            >
+              <MemberPackageCard v-for="pkg in pastPackages" :key="pkg.id" :pkg="pkg" />
+            </div>
+          </div>
+        </template>
+      </section>
+
+      <!-- 공통 이용권 추가 모달 -->
+      <AddPackageDialog ref="packageDialog" :member-id="member.id" />
 
       <!-- 회원 정보 수정 모달 -->
       <EditMemberDialog

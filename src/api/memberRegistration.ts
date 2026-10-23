@@ -71,3 +71,49 @@ export async function checkMemberPhoneDuplicate(
 
   return (data?.length ?? 0) > 0
 }
+
+// 월 회원권 등록 데이터 타입
+export interface RegisterMemberWithMembershipParams {
+  name: string
+  phone: string
+  startsOn: string
+  endsOn: string
+}
+
+// 신규 회원 및 월 회원권 등록
+export async function registerMemberWithMembership(
+  member: RegisterMemberWithMembershipParams,
+): Promise<string> {
+  const { data, error } = await supabase.rpc('register_member_with_membership', {
+    p_name: member.name.trim(),
+    p_phone: member.phone,
+    p_starts_on: member.startsOn,
+    p_ends_on: member.endsOn,
+  })
+
+  if (error) throw error
+
+  return data
+}
+
+// 신규 회원 및 그룹 횟수제 등록 데이터 타입
+export interface RegisterMemberWithGroupParams {
+  name: string
+  phone: string
+  totalSessions: number
+}
+
+// 신규 회원과 그룹 횟수제 이용권 등록
+export async function registerMemberWithGroup(
+  member: RegisterMemberWithGroupParams,
+): Promise<string> {
+  const { data, error } = await supabase.rpc('register_member_with_group', {
+    p_name: member.name.trim(),
+    p_phone: member.phone,
+    p_total_sessions: member.totalSessions,
+  })
+
+  if (error) throw error
+
+  return data
+}

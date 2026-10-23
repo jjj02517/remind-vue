@@ -140,6 +140,7 @@ watch(
         :title="pageTitle"
         :menu-open="isSidebarOpen"
         @toggle-menu="isSidebarOpen ? closeSidebar() : openSidebar()"
+        @logout="handleLogout"
       />
 
       <!-- 페이지 콘텐츠 -->

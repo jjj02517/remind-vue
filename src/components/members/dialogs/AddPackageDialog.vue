@@ -4,6 +4,7 @@ import { CalendarDays, ChevronRight, Dumbbell, Users } from 'lucide-vue-next'
 
 import AddPtPackageDialog from '@/components/members/dialogs/AddPtPackageDialog.vue'
 import AddGroupPackageDialog from '@/components/members/dialogs/AddGroupPackageDialog.vue'
+import AddMembershipPackageDialog from '@/components/members/dialogs/AddMembershipPackageDialog.vue'
 
 // 부모 컴포넌트에서 회원 ID 전달받기
 defineProps<{
@@ -19,8 +20,11 @@ const ptPackageDialog = ref<InstanceType<typeof AddPtPackageDialog> | null>(null
 // 그룹 횟수제 이용권 추가 모달 컴포넌트 참조
 const groupPackageDialog = ref<InstanceType<typeof AddGroupPackageDialog> | null>(null)
 
-// 현재 추가 가능한 이용권 종류
-type PackageType = 'pt' | 'group'
+// 월 회원권 추가 모달 컴포넌트 참조
+const membershipPackageDialog = ref<InstanceType<typeof AddMembershipPackageDialog> | null>(null)
+
+// 추가 가능한 이용권 종류
+type PackageType = 'pt' | 'group' | 'membership'
 
 // 공통 이용권 선택 모달 열기
 function openPackageDialog() {
@@ -46,6 +50,12 @@ function selectPackageType(type: PackageType) {
   // 그룹 횟수제 이용권 추가 모달 열기
   if (type === 'group') {
     groupPackageDialog.value?.open()
+    return
+  }
+
+  // 월 회원권 추가 모달 열기
+  if (type === 'membership') {
+    membershipPackageDialog.value?.open()
   }
 }
 
@@ -109,10 +119,11 @@ defineExpose({
         <ChevronRight :size="18" class="shrink-0 text-slate-400" aria-hidden="true" />
       </button>
 
-      <!-- 월 회원권: 기존 회원 추가 API 구현 후 활성화 -->
-      <div
-        aria-disabled="true"
-        class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 opacity-70"
+      <!-- 월 회원권 -->
+      <button
+        type="button"
+        class="flex w-full items-center gap-3 rounded-xl border border-slate-200 p-4 text-left transition hover:border-blue-400 hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-blue-600"
+        @click="selectPackageType('membership')"
       >
         <span class="rounded-lg bg-emerald-50 p-3 text-emerald-600">
           <CalendarDays :size="20" aria-hidden="true" />
@@ -123,12 +134,8 @@ defineExpose({
           <span class="mt-1 block text-xs text-slate-500"> 시작일과 종료일로 관리 </span>
         </span>
 
-        <span
-          class="shrink-0 rounded-full bg-slate-200 px-2 py-1 text-xs font-medium text-slate-600"
-        >
-          준비 중
-        </span>
-      </div>
+        <ChevronRight :size="18" class="shrink-0 text-slate-400" aria-hidden="true" />
+      </button>
     </div>
 
     <!-- 모달 닫기 -->
@@ -148,4 +155,7 @@ defineExpose({
 
   <!-- 기존 그룹 횟수제 이용권 추가 모달 -->
   <AddGroupPackageDialog ref="groupPackageDialog" :member-id="memberId" />
+
+  <!-- 월 회원권 추가 모달 -->
+  <AddMembershipPackageDialog ref="membershipPackageDialog" :member-id="memberId" />
 </template>

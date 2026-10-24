@@ -208,6 +208,32 @@ const companyNameById = computed(
   () => new Map((allCompanies.value ?? []).map((company) => [company.id, company.name])),
 )
 
+// 이용권 근무처 필터 (전체 근무처 또는 특정 근무처)
+const packageCompanyFilter = ref('all')
+
+// 이 회원과 연결되어 있거나 이용권 이력이 있는 근무처만 필터에 표시
+// 보관된 근무처도 지난 이용권 조회를 위해 포함
+const packageFilterCompanies = computed(() => {
+  const companyIds = new Set<string>()
+
+  for (const company of memberCompanies.value ?? []) {
+    companyIds.add(company.id)
+  }
+
+  for (const pkg of dbPackages.value ?? []) {
+    if (pkg.company_id) companyIds.add(pkg.company_id)
+  }
+
+  return (allCompanies.value ?? []).filter((company) => companyIds.has(company.id))
+})
+
+// 근무처 선택 결과: 전체 이용권은 유지하고 화면에 표시할 이용권만 필터링
+const filteredPackages = computed(() => {
+  if (packageCompanyFilter.value === 'all') return dbPackages.value ?? []
+
+  return (dbPackages.value ?? []).filter((pkg) => pkg.company_id === packageCompanyFilter.value)
+})
+
 // 이용권별 근무처 이름 표시
 function getPackageCompanyName(companyId: string | null): string | null {
   // 이전 데이터에 근무처가 지정되지 않은 경우
@@ -332,14 +358,14 @@ function isCurrentPackage(
 const currentPackages = computed(() => {
   const today = getTodayString()
 
-  return (dbPackages.value ?? []).filter((pkg) => isCurrentPackage(pkg, today))
+  return filteredPackages.value.filter((pkg) => isCurrentPackage(pkg, today))
 })
 
 // 사용 완료·기간 만료·취소된 지난 이용권
 const pastPackages = computed(() => {
   const today = getTodayString()
 
-  return (dbPackages.value ?? []).filter((pkg) => !isCurrentPackage(pkg, today))
+  return filteredPackages.value.filter((pkg) => !isCurrentPackage(pkg, today))
 })
 
 // 지난 이용권 펼침 상태
@@ -629,12 +655,55 @@ onMounted(async () => {
           </button>
         </div>
 
-        <!-- 등록된 이용권 없음 -->
+        <!-- 근무처별 이용권 필터 -->
+        <div class="mt-5 flex flex-wrap items-end justify-between gap-3">
+          <div class="w-full sm:w-72">
+            <label
+              for="package-company-filter"
+              class="mb-2 block text-sm font-medium text-slate-700"
+            >
+              근무처별 이용권 보기
+            </label>
+            <select
+              id="package-company-filter"
+              v-model="packageCompanyFilter"
+              :disabled="isAllCompaniesLoading || !!allCompaniesError || isCompaniesLoading"
+              class="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="all">전체 근무처</option>
+              <option
+                v-for="company in packageFilterCompanies"
+                :key="company.id"
+                :value="company.id"
+              >
+                {{ company.name }}{{ company.is_active ? '' : ' (보관됨)' }}
+              </option>
+            </select>
+            <p
+              v-if="allCompaniesError || companiesError"
+              role="alert"
+              class="mt-2 text-xs text-red-600"
+            >
+              근무처 필터 목록을 불러오지 못했습니다.
+            </p>
+          </div>
+          <p v-if="packageCompanyFilter !== 'all'" class="text-sm text-slate-500">
+            선택한 근무처의 이용권: {{ filteredPackages.length }}개
+          </p>
+        </div>
+
+        <!-- 선택한 근무처에 등록된 이용권 없음 -->
         <div
-          v-if="!dbPackages?.length"
+          v-if="!filteredPackages.length"
           class="mt-5 rounded-xl border border-slate-200 bg-white px-6 py-12 text-center"
         >
-          <p class="text-sm text-slate-500">등록된 이용권이 없습니다.</p>
+          <p class="text-sm text-slate-500">
+            {{
+              packageCompanyFilter === 'all'
+                ? '등록된 이용권이 없습니다.'
+                : '선택한 근무처에 등록된 이용권이 없습니다.'
+            }}
+          </p>
         </div>
 
         <template v-else>

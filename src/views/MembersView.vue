@@ -8,6 +8,7 @@ import MemberRegisterDialog from '@/components/members/dialogs/MemberRegisterDia
 
 import { normalizePhone } from '@/utils/phone'
 import { getMembers } from '@/api/members'
+import { getCompanies } from '@/api/companies'
 import { supabase } from '@/lib/supabase'
 
 // 회원 상태 필터 타입
@@ -16,7 +17,8 @@ type MemberStatusFilter = 'all' | 'active' | 'inactive'
 // 로그인한 트레이너 ID
 const trainerId = ref<string | null>(null)
 
-// 사용자 정보 조회 오류
+// 사용자 정보 조회 상태 및 오류
+const isAuthLoading = ref(true)
 const authError = ref('')
 
 // TanStack Query로 Supabase 회원 목록 조회
@@ -44,19 +46,134 @@ const {
   refetchOnWindowFocus: false,
 })
 
+// 회원과 근무처 연결 데이터 타입
+interface MemberCompanyLink {
+  member_id: string
+  company_id: string
+}
+
+// TanStack Query로 회원과 근무처 연결 관계 조회
+const {
+  data: memberCompanyLinks,
+  isPending: isLinksLoading,
+  error: linksError,
+} = useQuery({
+  // 기존 ['members'] 캐시 무효화 시 연결 관계도 함께 갱신
+  queryKey: computed(() => ['members', trainerId.value, 'company-links']),
+
+  queryFn: async (): Promise<MemberCompanyLink[]> => {
+    const { data, error } = await supabase
+      .from('company_members')
+      .select('member_id, company_id')
+      .eq('trainer_id', trainerId.value!)
+
+    if (error) throw error
+
+    return data ?? []
+  },
+
+  // 로그인한 트레이너의 연결 정보만 조회
+  enabled: computed(() => !!trainerId.value),
+  staleTime: 1000 * 60 * 5,
+  retry: false,
+})
+
+// TanStack Query로 근무처 목록 조회
+const {
+  data: dbCompanies,
+  isPending: isCompaniesLoading,
+  error: companiesError,
+} = useQuery({
+  // 다른 계정의 캐시와 혼합되지 않도록 트레이너별로 구분
+  queryKey: computed(() => ['companies', trainerId.value]),
+  queryFn: getCompanies,
+  enabled: computed(() => !!trainerId.value),
+  staleTime: 1000 * 60 * 5,
+  retry: false,
+})
+
 // 회원 목록 조회 오류 메시지
 const fetchError = computed(() => {
   if (authError.value) return authError.value
   if (queryError.value) return '회원 목록을 불러오지 못했습니다.'
+  if (linksError.value) return '회원의 소속 근무처를 불러오지 못했습니다.'
+  if (companiesError.value) return '근무처 목록을 불러오지 못했습니다.'
 
   return ''
 })
+
+// 회원 및 근무처 조회 중 상태
+const isPageLoading = computed(
+  () =>
+    isAuthLoading.value ||
+    (!!trainerId.value && (isLoading.value || isLinksLoading.value || isCompaniesLoading.value)),
+)
 
 // 회원 검색어
 const searchKeyword = ref('')
 
 // 회원 상태 필터
 const statusFilter = ref<MemberStatusFilter>('all')
+
+// 근무처 필터 ('all' 또는 근무처 UUID)
+const companyFilter = ref('all')
+
+// 필터에서 선택 가능한 활성 근무처 목록
+const activeCompanies = computed(() =>
+  (dbCompanies.value ?? []).filter((company) => company.is_active),
+)
+
+// 회원별 연결된 근무처 ID 목록 생성
+const companyIdsByMemberId = computed(() => {
+  const result = new Map<string, Set<string>>()
+
+  for (const link of memberCompanyLinks.value ?? []) {
+    const companyIds = result.get(link.member_id) ?? new Set<string>()
+    companyIds.add(link.company_id)
+    result.set(link.member_id, companyIds)
+  }
+
+  return result
+})
+
+// 회원 목록 배지용 근무처 데이터 타입
+interface MemberCompanyBadge {
+  id: string
+  name: string
+  isActive: boolean
+  isPersonal: boolean
+}
+
+// 회원마다 연결된 근무처 이름, 종류 및 보관 여부 표시 데이터 생성
+const companiesByMemberId = computed<Record<string, MemberCompanyBadge[]>>(() => {
+  const result: Record<string, MemberCompanyBadge[]> = {}
+  const companiesById = new Map((dbCompanies.value ?? []).map((company) => [company.id, company]))
+
+  for (const link of memberCompanyLinks.value ?? []) {
+    const company = companiesById.get(link.company_id)
+    if (!company) continue
+
+    const badges = (result[link.member_id] ??= [])
+    // 중복 연결이 존재해도 같은 근무처는 한 번만 표시
+    if (badges.some((badge) => badge.id === company.id)) continue
+
+    badges.push({
+      id: company.id,
+      name: company.name,
+      isActive: company.is_active,
+      isPersonal: company.company_type === 'personal',
+    })
+  }
+
+  // 기본 '개인 고객'을 먼저 표시하고 나머지는 근무처 이름순 정렬
+  for (const badges of Object.values(result)) {
+    badges.sort(
+      (a, b) => Number(b.isPersonal) - Number(a.isPersonal) || a.name.localeCompare(b.name, 'ko'),
+    )
+  }
+
+  return result
+})
 
 // 회원 상태 필터 옵션
 const statusFilterOptions: {
@@ -73,7 +190,7 @@ function changeStatusFilter(status: MemberStatusFilter) {
   statusFilter.value = status
 }
 
-// 검색어 및 상태에 따라 필터링된 회원 목록
+// 검색어, 회원 상태 및 근무처에 따라 필터링된 회원 목록
 const filteredMembers = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
   const phoneKeyword = normalizePhone(keyword)
@@ -89,7 +206,15 @@ const filteredMembers = computed(() => {
 
     if (!matchesStatus) return false
 
-    // 검색어가 없는 경우 상태 필터만 적용
+    // 선택한 근무처에 연결된 회원만 표시
+    if (
+      companyFilter.value !== 'all' &&
+      !companyIdsByMemberId.value.get(member.id)?.has(companyFilter.value)
+    ) {
+      return false
+    }
+
+    // 검색어가 없는 경우 상태 및 근무처 필터만 적용
     if (!keyword) return true
 
     // 회원명 검색
@@ -129,6 +254,8 @@ onMounted(async () => {
     console.error('사용자 정보 조회 오류:', error)
 
     authError.value = '사용자 정보를 확인하지 못했습니다.'
+  } finally {
+    isAuthLoading.value = false
   }
 })
 </script>
@@ -180,6 +307,27 @@ onMounted(async () => {
       </div>
     </div>
 
+    <!-- 근무처 필터 -->
+    <div class="mt-4 max-w-sm">
+      <label for="member-company-filter" class="mb-2 block text-sm font-medium text-slate-700">
+        근무처
+      </label>
+      <select
+        id="member-company-filter"
+        v-model="companyFilter"
+        :disabled="isPageLoading || !!fetchError"
+        class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <option value="all">전체 근무처</option>
+        <option v-for="company in activeCompanies" :key="company.id" :value="company.id">
+          {{ company.name }}
+        </option>
+      </select>
+      <p class="mt-1 text-xs text-slate-500">
+        여러 근무처에 소속된 회원도 목록에는 한 번만 표시됩니다.
+      </p>
+    </div>
+
     <!-- Supabase 회원 조회 상태 확인 (임시) -->
     <div class="mt-4 rounded-lg border border-slate-200 bg-white p-4 text-sm">
       <!-- 회원 목록 조회 오류 -->
@@ -187,8 +335,8 @@ onMounted(async () => {
         {{ fetchError }}
       </p>
 
-      <!-- 회원 목록 조회 중 -->
-      <p v-else-if="isLoading" class="text-slate-500">Supabase 회원 목록 불러오는 중...</p>
+      <!-- 회원 및 근무처 목록 조회 중 -->
+      <p v-else-if="isPageLoading" class="text-slate-500">Supabase 회원 목록 불러오는 중...</p>
 
       <!-- 검색 및 필터 적용 결과 -->
       <p v-else class="text-slate-600">
@@ -200,7 +348,11 @@ onMounted(async () => {
     </div>
 
     <!-- 회원 목록 -->
-    <MemberList v-if="!isLoading && !fetchError" :members="filteredMembers" />
+    <MemberList
+      v-if="!isPageLoading && !fetchError"
+      :members="filteredMembers"
+      :companies-by-member-id="companiesByMemberId"
+    />
 
     <!-- 회원 등록 모달 -->
     <MemberRegisterDialog ref="registerDialog" />

@@ -67,6 +67,48 @@ export async function createCompany(name: string): Promise<Company> {
   return data as Company
 }
 
+// 일반 근무처와 최초 정산 단가를 함께 등록하기 위한 파라미터
+export interface CreateCompanyWithRatesParams {
+  name: string
+  effectiveFrom: string | null
+  ptRatePerSession: number | null
+  groupRatePerAttendee: number | null
+}
+
+// 근무처 생성과 최초 단가 이력을 하나의 트랜잭션에서 처리
+export async function createCompanyWithRates(
+  params: CreateCompanyWithRatesParams,
+): Promise<Company> {
+  const trimmedName = params.name.trim()
+
+  if (!trimmedName) throw new Error('근무처 이름을 입력해 주세요.')
+  if (trimmedName.length > 100) throw new Error('근무처 이름은 100자 이내로 입력해 주세요.')
+
+  const rates = [params.ptRatePerSession, params.groupRatePerAttendee]
+  if (
+    rates.some(
+      (rate) => rate !== null && (!Number.isInteger(rate) || rate < 0 || rate > 2147483647),
+    )
+  ) {
+    throw new Error('단가는 0원 이상, 2,147,483,647원 이하의 정수로 입력해 주세요.')
+  }
+
+  const hasRates = rates.some((rate) => rate !== null)
+  if (hasRates && (!params.effectiveFrom || !/^\d{4}-\d{2}-\d{2}$/.test(params.effectiveFrom))) {
+    throw new Error('정산 단가 적용 시작일을 입력해 주세요.')
+  }
+
+  const { data, error } = await supabase.rpc('create_company_with_rates', {
+    p_name: trimmedName,
+    p_effective_from: hasRates ? params.effectiveFrom : null,
+    p_pt_rate_per_session: params.ptRatePerSession,
+    p_group_rate_per_attendee: params.groupRatePerAttendee,
+  })
+
+  if (error) throw error
+  return data as Company
+}
+
 // 근무처 이름 수정
 export async function updateCompany(companyId: string, name: string): Promise<Company> {
   const trimmedName = name.trim()

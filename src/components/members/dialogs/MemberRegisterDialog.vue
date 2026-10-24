@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useMutation, useQueryClient } from '@tanstack/vue-query'
+import { computed, ref, watch } from 'vue'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { formatPhone, isValidPhone, normalizePhone } from '@/utils/phone'
 import {
   registerMemberWithPt,
@@ -9,6 +9,7 @@ import {
   registerMemberWithGroup,
 } from '@/api/memberRegistration'
 import { useMemberDuplicateCheck } from '@/composables/useMemberDuplicateCheck'
+import { getCompanies } from '@/api/companies'
 import type { Member } from '@/types/member'
 
 // 신규 회원 등록 데이터 타입
@@ -24,12 +25,14 @@ type RegistrationType = 'pt' | 'group' | 'membership' | 'none'
 type RegisterMemberParams =
   | {
       registrationType: 'pt' | 'group'
+      companyId: string
       name: string
       phone: string
       totalSessions: number
     }
   | {
       registrationType: 'membership'
+      companyId: string
       name: string
       phone: string
       startsOn: string
@@ -37,6 +40,7 @@ type RegisterMemberParams =
     }
   | {
       registrationType: 'none'
+      companyId: string
       name: string
       phone: string
     }
@@ -52,6 +56,46 @@ const registerDialog = ref<HTMLDialogElement | null>(null)
 
 // 회원 등록 방식 선택
 const registrationType = ref<RegistrationType>('pt')
+
+// 등록 모달이 열려 있는지 확인
+const isDialogOpen = ref(false)
+
+// 선택한 근무처 ID
+const selectedCompanyId = ref('')
+
+// 모달이 열렸을 때 활성 근무처 목록 조회
+const {
+  data: companies,
+  isPending: isCompaniesLoading,
+  error: companiesQueryError,
+  refetch: refetchCompanies,
+} = useQuery({
+  queryKey: ['companies'],
+  queryFn: getCompanies,
+  enabled: computed(() => isDialogOpen.value),
+  staleTime: 1000 * 60 * 5,
+})
+
+// 보관된 근무처는 신규 회원 등록에서 제외
+const activeCompanies = computed(() =>
+  (companies.value ?? []).filter((company) => company.is_active),
+)
+
+// 근무처 목록을 불러오면 기본 '개인 고객'을 선택
+watch([isDialogOpen, activeCompanies], ([isOpen, available]) => {
+  if (!isOpen) return
+
+  // 사용자가 선택한 활성 근무처는 유지
+  if (available.some((company) => company.id === selectedCompanyId.value)) return
+
+  selectedCompanyId.value =
+    available.find((company) => company.company_type === 'personal')?.id ?? ''
+})
+
+// 선택한 근무처가 현재 사용 가능한 근무처인지 확인
+const isCompanySelectionValid = computed(() =>
+  activeCompanies.value.some((company) => company.id === selectedCompanyId.value),
+)
 
 // 신규 회원 입력 데이터
 const newMember = ref<NewMember>({
@@ -90,6 +134,7 @@ const { mutateAsync: registerMember, isPending: isRegistering } = useMutation({
     // PT 이용권과 함께 회원 등록
     if (member.registrationType === 'pt') {
       return registerMemberWithPt({
+        companyId: member.companyId,
         name: member.name,
         phone: member.phone,
         totalSessions: member.totalSessions,
@@ -98,6 +143,7 @@ const { mutateAsync: registerMember, isPending: isRegistering } = useMutation({
     // 그룹 횟수제 이용권과 함께 회원 등록
     if (member.registrationType === 'group') {
       return registerMemberWithGroup({
+        companyId: member.companyId,
         name: member.name,
         phone: member.phone,
         totalSessions: member.totalSessions,
@@ -106,6 +152,7 @@ const { mutateAsync: registerMember, isPending: isRegistering } = useMutation({
     // 월 회원권과 함께 회원 등록
     if (member.registrationType === 'membership') {
       return registerMemberWithMembership({
+        companyId: member.companyId,
         name: member.name,
         phone: member.phone,
         startsOn: member.startsOn,
@@ -114,6 +161,7 @@ const { mutateAsync: registerMember, isPending: isRegistering } = useMutation({
     }
     // 이용권 없이 회원 기본 정보만 등록
     return registerMemberOnly({
+      companyId: member.companyId,
       name: member.name,
       phone: member.phone,
     })
@@ -186,6 +234,10 @@ const membershipPeriodError = computed(() => {
 const isSubmitDisabled = computed(() => {
   // 등록 또는 중복 검사 진행 중
   if (isBusy.value) return true
+  // 근무처 조회 중이거나 선택한 근무처가 유효하지 않은 경우
+  if (isCompaniesLoading.value || companiesQueryError.value || !isCompanySelectionValid.value) {
+    return true
+  }
   // 회원명 미입력
   const name = newMember.value.name.trim()
   if (!name) return true
@@ -261,8 +313,18 @@ function handleMembershipPeriodChange() {
 
 // 회원 등록 모달 열기
 function openRegisterDialog() {
+  if (registerDialog.value?.open) return
+
   registerError.value = ''
+  selectedCompanyId.value = ''
+  isDialogOpen.value = true
   registerDialog.value?.showModal()
+}
+
+// 모달 종료 시 근무처 조회 중단 및 폼 초기화
+function handleDialogClose() {
+  isDialogOpen.value = false
+  resetForm()
 }
 
 // 회원 등록 모달 닫기
@@ -288,8 +350,9 @@ function resetForm() {
     startsOn: '',
     endsOn: '',
   }
-  // 등록 방식 초기화
+  // 등록 방식 및 근무처 선택 초기화
   registrationType.value = 'pt'
+  selectedCompanyId.value = ''
   registerError.value = ''
   // 이름 및 연락처 중복 검사 상태 초기화
   resetDuplicateCheck()
@@ -304,6 +367,10 @@ async function submitMember() {
   const startsOn = newMember.value.startsOn
   const endsOn = newMember.value.endsOn
   const selectedRegistrationType = registrationType.value
+  const companyId = selectedCompanyId.value
+
+  // 활성 근무처를 선택하지 않은 경우 등록 중단
+  if (!activeCompanies.value.some((company) => company.id === companyId)) return
   // 회원명 필수
   if (!name) return
   // PT 또는 그룹 횟수제 등록 시 횟수 검사
@@ -346,6 +413,7 @@ async function submitMember() {
     if (selectedRegistrationType === 'pt') {
       await registerMember({
         registrationType: 'pt',
+        companyId,
         name,
         phone,
         totalSessions,
@@ -355,6 +423,7 @@ async function submitMember() {
     else if (selectedRegistrationType === 'group') {
       await registerMember({
         registrationType: 'group',
+        companyId,
         name,
         phone,
         totalSessions,
@@ -364,6 +433,7 @@ async function submitMember() {
     else if (selectedRegistrationType === 'membership') {
       await registerMember({
         registrationType: 'membership',
+        companyId,
         name,
         phone,
         startsOn,
@@ -374,6 +444,7 @@ async function submitMember() {
     else {
       await registerMember({
         registrationType: 'none',
+        companyId,
         name,
         phone,
       })
@@ -408,7 +479,7 @@ defineExpose({
     aria-labelledby="register-dialog-title"
     aria-describedby="register-dialog-description"
     class="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-slate-900 shadow-xl backdrop:bg-black/40 sm:p-8"
-    @close="resetForm"
+    @close="handleDialogClose"
     @cancel="handleCancel"
   >
     <!-- 모달 제목 -->
@@ -477,6 +548,51 @@ defineExpose({
         <p v-if="phoneError" id="member-phone-error" role="alert" class="mt-2 text-xs text-red-500">
           {{ phoneError }}
         </p>
+      </div>
+      <!-- 회원 등록 근무처 선택 -->
+      <div>
+        <label for="member-company" class="mb-2 block text-sm font-medium text-slate-700">
+          근무처
+        </label>
+
+        <!-- 근무처 목록 조회 중 -->
+        <p v-if="isCompaniesLoading" class="text-sm text-slate-500">근무처 목록을 불러오는 중...</p>
+
+        <!-- 근무처 목록 조회 오류 -->
+        <div v-else-if="companiesQueryError" class="space-y-2">
+          <p role="alert" class="text-sm text-red-600">근무처 목록을 불러오지 못했습니다.</p>
+          <button
+            type="button"
+            :disabled="isBusy"
+            class="text-sm font-medium text-blue-600 underline disabled:opacity-50"
+            @click="refetchCompanies()"
+          >
+            다시 시도
+          </button>
+        </div>
+
+        <!-- 선택 가능한 근무처 없음 -->
+        <p v-else-if="!activeCompanies.length" role="alert" class="text-sm text-amber-700">
+          활성 근무처가 없습니다. 근무처 관리에서 확인해 주세요.
+        </p>
+
+        <!-- 활성 근무처 중 선택 -->
+        <select
+          v-else
+          id="member-company"
+          v-model="selectedCompanyId"
+          required
+          :disabled="isBusy"
+          class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
+        >
+          <option value="" disabled>근무처를 선택해 주세요</option>
+          <option v-for="company in activeCompanies" :key="company.id" :value="company.id">
+            {{ company.name }}{{ company.company_type === 'personal' ? ' (기본)' : '' }}
+          </option>
+        </select>
+
+        <!-- 회원 등록 시 선택한 근무처에 회원과 이용권 연결 -->
+        <p class="mt-2 text-xs text-slate-500">선택한 근무처에 회원과 이용권이 연결됩니다.</p>
       </div>
       <!-- 회원 등록 방식 선택 -->
       <fieldset :disabled="isBusy">

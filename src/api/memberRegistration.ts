@@ -5,12 +5,14 @@ export interface RegisterMemberWithPtParams {
   name: string
   phone: string
   totalSessions: number
+  companyId?: string | null
 }
 
 // 회원 기본 정보 등록 데이터 타입
 export interface RegisterMemberOnlyParams {
   name: string
   phone: string
+  companyId?: string | null
 }
 
 // 신규 회원 및 PT 이용권 등록
@@ -19,6 +21,7 @@ export async function registerMemberWithPt(member: RegisterMemberWithPtParams) {
     p_name: member.name.trim(),
     p_phone: member.phone,
     p_total_sessions: member.totalSessions,
+    p_company_id: member.companyId ?? null,
   })
 
   if (error) throw error
@@ -29,6 +32,7 @@ export async function registerMemberOnly(member: RegisterMemberOnlyParams): Prom
   const { data, error } = await supabase.rpc('register_member_only', {
     p_name: member.name.trim(),
     p_phone: member.phone,
+    p_company_id: member.companyId ?? null,
   })
 
   if (error) throw error
@@ -78,6 +82,7 @@ export interface RegisterMemberWithMembershipParams {
   phone: string
   startsOn: string
   endsOn: string
+  companyId?: string | null
 }
 
 // 신규 회원 및 월 회원권 등록
@@ -89,6 +94,7 @@ export async function registerMemberWithMembership(
     p_phone: member.phone,
     p_starts_on: member.startsOn,
     p_ends_on: member.endsOn,
+    p_company_id: member.companyId ?? null,
   })
 
   if (error) throw error
@@ -101,6 +107,7 @@ export interface RegisterMemberWithGroupParams {
   name: string
   phone: string
   totalSessions: number
+  companyId?: string | null
 }
 
 // 신규 회원과 그룹 횟수제 이용권 등록
@@ -111,6 +118,7 @@ export async function registerMemberWithGroup(
     p_name: member.name.trim(),
     p_phone: member.phone,
     p_total_sessions: member.totalSessions,
+    p_company_id: member.companyId ?? null,
   })
 
   if (error) throw error

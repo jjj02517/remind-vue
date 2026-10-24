@@ -53,6 +53,13 @@ const router = createRouter({
           component: () => import('@/views/MemberDetailView.vue'),
           meta: { title: '회원 상세' },
         },
+        // 근무처 관리 페이지
+        {
+          path: 'companies',
+          name: 'companies',
+          component: () => import('@/views/CompaniesView.vue'),
+          meta: { title: '근무처 관리' },
+        },
         {
           path: 'sessions',
           name: 'sessions',

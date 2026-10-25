@@ -15,6 +15,7 @@ import type { MemberStatus } from '@/utils/memberStatus'
 import MemberPackageCard from '@/components/members/MemberPackageCard.vue'
 import AddPackageDialog from '@/components/members/dialogs/AddPackageDialog.vue'
 import EditMemberDialog from '@/components/members/dialogs/EditMemberDialog.vue'
+import MemberSessionHistory from '@/components/members/MemberSessionHistory.vue'
 
 // 회원 상세 화면 데이터 타입
 interface MemberDetailData {
@@ -771,6 +772,9 @@ onMounted(async () => {
           </div>
         </template>
       </section>
+
+      <!-- 회원별 수업 이력 -->
+      <MemberSessionHistory :member-id="member.id" />
 
       <!-- 공통 이용권 추가 모달 -->
       <AddPackageDialog ref="packageDialog" :member-id="member.id" />

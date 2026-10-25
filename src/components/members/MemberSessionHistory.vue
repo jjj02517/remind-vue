@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { CalendarDays, ChevronDown, LoaderCircle, Pencil, Save, X } from 'lucide-vue-next'
 
 import { supabase } from '@/lib/supabase'
@@ -81,160 +81,136 @@ function getStatusClass(status: AttendanceStatus): string {
 }
 
 // ============================================
-// 회원별 수업 이력 조회
+// 회원별 수업 이력 조회 (서버 페이지네이션)
 // ============================================
 
 const queryClient = useQueryClient()
+const PAGE_SIZE = 5
 
+// 근무처별 수업 이력 필터 (전체 근무처가 기본값)
+const selectedCompanyId = ref('all')
+
+// ============================================
+// 1. 전체 이력을 기준으로 근무처와 수업 건수 조회
+// ============================================
+
+// 현재 화면에 불러온 첫 5건만으로 근무처 목록을 만들지 않음.
+// 과거에 다른 근무처의 수업이 있어도 필터에 정확히 표시됨.
 const {
-  data: sessionRecords,
-  isPending: isLoading,
-  error: queryError,
+  data: historyCompanies,
+  error: companiesError,
+  isPending: isCompaniesLoading,
 } = useQuery({
-  queryKey: computed(() => ['member-session-history', props.memberId]),
-
+  queryKey: computed(() => ['member-session-history-companies', props.memberId]),
   enabled: computed(() => !!props.memberId),
+  queryFn: async () => {
+    const { data, error } = await supabase.rpc('get_member_session_history_companies', {
+      p_member_id: props.memberId,
+    })
+    if (error) throw error
 
-  queryFn: async (): Promise<MemberSessionRecord[]> => {
-    // ============================================
-    // 1. 해당 회원의 출석 및 운동 기록 조회
-    // ============================================
-
-    // 초기 MVP는 최근 등록된 기록 100건까지 조회
-    // 전체 이력의 수업일 기준 서버 페이지네이션은 후속 단계에서 적용
-    const { data: attendances, error: attendanceError } = await supabase
-      .from('session_attendances')
-      .select('id, session_id, attendance_status, workout_notes')
-      .eq('member_id', props.memberId)
-      .order('created_at', { ascending: false })
-      .limit(100)
-
-    if (attendanceError) throw attendanceError
-    if (!attendances?.length) return []
-
-    // ============================================
-    // 2. 연결된 수업 일정 및 계획 조회
-    // ============================================
-
-    const sessionIds = [...new Set(attendances.map((attendance) => attendance.session_id))]
-
-    const { data: sessions, error: sessionError } = await supabase
-      .from('sessions')
-      .select('id, company_id, starts_at, ends_at, session_type, notes')
-      .in('id', sessionIds)
-      // 소프트 삭제된 수업은 이력에서 제외
-      .is('deleted_at', null)
-
-    if (sessionError) throw sessionError
-    if (!sessions?.length) return []
-
-    // ============================================
-    // 3. 근무처 이름 조회
-    // ============================================
-
-    const companyIds = [...new Set(sessions.map((session) => session.company_id))]
-
-    const { data: companies, error: companyError } = await supabase
-      .from('companies')
-      .select('id, name')
-      .in('id', companyIds)
-
-    if (companyError) throw companyError
-
-    const companyNames = new Map((companies ?? []).map((company) => [company.id, company.name]))
-    const sessionsById = new Map(sessions.map((session) => [session.id, session]))
-
-    // ============================================
-    // 4. 회원별 수업 이력 데이터 구성
-    // ============================================
-
-    const records: MemberSessionRecord[] = []
-
-    for (const attendance of attendances) {
-      const session = sessionsById.get(attendance.session_id)
-      if (!session) continue
-
-      records.push({
-        attendanceId: attendance.id,
-        sessionId: session.id,
-        startsAt: session.starts_at,
-        endsAt: session.ends_at,
-        sessionType: session.session_type as SessionType,
-        attendanceStatus: attendance.attendance_status as AttendanceStatus,
-        companyId: session.company_id,
-        companyName: companyNames.get(session.company_id) ?? '근무처 확인 필요',
-        sessionNotes: session.notes,
-        workoutNotes: attendance.workout_notes ?? null,
-      })
-    }
-
-    // 실제 수업 날짜 기준 최신순 정렬
-    return records.sort((a, b) => new Date(b.startsAt).getTime() - new Date(a.startsAt).getTime())
+    return (data ?? []).map((company) => ({
+      id: company.company_id,
+      name: company.company_name,
+      count: Number(company.session_count),
+    }))
   },
-
-  // 상세 화면에 다시 들어왔을 때 최신 출석/운동 기록 확인
   refetchOnMount: 'always',
   staleTime: 1000 * 60,
 })
 
-// ============================================
-// 근무처별 수업 이력 필터
-// ============================================
+const companyOptions = computed(() => historyCompanies.value ?? [])
 
-const selectedCompanyId = ref('all')
-
-// 수업 이력이 있는 근무처만 선택지에 표시
-const companyOptions = computed(() => {
-  const companies = new Map<string, string>()
-
-  for (const record of sessionRecords.value ?? []) {
-    companies.set(record.companyId, record.companyName)
-  }
-
-  return [...companies.entries()]
-    .map(([id, name]) => ({ id, name }))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-})
-
-const filteredRecords = computed(() => {
+// 현재 선택한 근무처의 전체 수업 개수 (아직 불러오지 않은 수업 포함)
+const filteredTotalCount = computed(() => {
   if (selectedCompanyId.value === 'all') {
-    return sessionRecords.value ?? []
+    return companyOptions.value.reduce((sum, company) => sum + company.count, 0)
   }
-
-  return (sessionRecords.value ?? []).filter(
-    (record) => record.companyId === selectedCompanyId.value,
-  )
+  return companyOptions.value.find((company) => company.id === selectedCompanyId.value)?.count ?? 0
 })
 
 // ============================================
-// 수업 이력 더 보기
+// 2. 실제 수업 날짜 기준으로 5건씩 조회
 // ============================================
 
-const visibleCount = ref(5)
+const {
+  data: sessionPages,
+  isPending: isLoading,
+  error: queryError,
+  hasNextPage,
+  isFetchingNextPage,
+  isFetchNextPageError,
+  fetchNextPage,
+} = useInfiniteQuery({
+  // 회원이나 근무처가 달라지면 다른 페이지 목록 사용
+  queryKey: computed(() => ['member-session-history', props.memberId, selectedCompanyId.value]),
+  enabled: computed(() => !!props.memberId),
+  initialPageParam: 0,
+  queryFn: async ({ pageParam }): Promise<MemberSessionRecord[]> => {
+    const { data, error } = await supabase.rpc('get_member_session_history_page', {
+      p_member_id: props.memberId,
+      p_company_id: selectedCompanyId.value === 'all' ? null : selectedCompanyId.value,
+      p_page_size: PAGE_SIZE,
+      p_offset: pageParam,
+    })
 
-const visibleRecords = computed(() => filteredRecords.value.slice(0, visibleCount.value))
+    if (error) throw error
 
-const hasMoreRecords = computed(() => visibleCount.value < filteredRecords.value.length)
+    return (data ?? []).map((record) => ({
+      attendanceId: record.attendance_id,
+      sessionId: record.session_id,
+      startsAt: record.starts_at,
+      endsAt: record.ends_at,
+      sessionType: record.session_type as SessionType,
+      attendanceStatus: record.attendance_status as AttendanceStatus,
+      companyId: record.company_id,
+      companyName: record.company_name,
+      sessionNotes: record.session_notes,
+      workoutNotes: record.workout_notes,
+    }))
+  },
+  // 5건을 모두 가져왔을 때 다음 페이지가 있을 수 있음.
+  // 마지막 페이지가 5건으로 끝나도 전체 건수와 비교해 버튼을 숨김.
+  getNextPageParam: (lastPage, allPages) =>
+    lastPage.length === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
+  refetchOnMount: 'always',
+  staleTime: 1000 * 60,
+})
 
-function showMoreRecords() {
-  visibleCount.value += 5
+// 이미 가져온 페이지를 화면에 이어 붙임 (조회 순서는 DB가 보장)
+const sessionRecords = computed<MemberSessionRecord[]>(() => sessionPages.value?.pages.flat() ?? [])
+
+// ============================================
+// 3. 이전 수업 더 보기
+// ============================================
+
+const hasMoreRecords = computed(() => {
+  if (!hasNextPage.value) return false
+  // 근무처 건수 조회가 실패했더라도 페이지별 조회는 계속 가능
+  if (isCompaniesLoading.value || companiesError.value) return true
+  return sessionRecords.value.length < filteredTotalCount.value
+})
+
+async function showMoreRecords() {
+  if (!hasMoreRecords.value || isFetchingNextPage.value || isSaving.value) return
+  await fetchNextPage()
 }
 
-// 근무처를 바꾸면 다시 최신 수업 5개부터 표시
+// 근무처를 바꾸면 새 쿼리가 자동으로 첫 5건부터 조회됨
 watch(selectedCompanyId, () => {
-  visibleCount.value = 5
   editingAttendanceId.value = null
+  editWorkoutNotes.value = ''
   saveError.value = ''
   saveSuccessId.value = null
 })
 
-// 다른 회원 상세 화면으로 이동하면 필터 초기화
+// 다른 회원 상세 화면으로 이동하면 근무처 필터 초기화
 watch(
   () => props.memberId,
   () => {
     selectedCompanyId.value = 'all'
-    visibleCount.value = 5
     editingAttendanceId.value = null
+    editWorkoutNotes.value = ''
     saveError.value = ''
     saveSuccessId.value = null
   },
@@ -320,7 +296,9 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
 </script>
 
 <template>
+  <!-- ============================================ -->
   <!-- 회원별 수업 이력 -->
+  <!-- ============================================ -->
   <section class="mt-8 rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
     <!-- 수업 이력 제목 -->
     <div class="flex flex-wrap items-center justify-between gap-3">
@@ -331,14 +309,16 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
         </p>
       </div>
       <span
-        v-if="sessionRecords"
+        v-if="!isCompaniesLoading && !companiesError"
         class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600"
       >
-        {{ filteredRecords.length }}개
+        총 {{ filteredTotalCount }}개
       </span>
     </div>
 
+    <!-- ============================================ -->
     <!-- 근무처별 수업 이력 필터 -->
+    <!-- ============================================ -->
     <div v-if="companyOptions.length > 1" class="mt-4">
       <label
         for="member-session-company-filter"
@@ -359,7 +339,14 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
       </select>
     </div>
 
+    <!-- 근무처 목록 조회 오류 (수업 이력 자체는 계속 조회 가능) -->
+    <p v-if="companiesError" role="alert" class="mt-3 text-xs text-amber-700">
+      근무처 필터 정보를 불러오지 못했습니다. 수업 이력은 계속 조회할 수 있습니다.
+    </p>
+
+    <!-- ============================================ -->
     <!-- 조회 상태 -->
+    <!-- ============================================ -->
     <div
       v-if="isLoading"
       class="mt-5 flex items-center justify-center gap-2 py-8 text-sm text-slate-500"
@@ -369,7 +356,7 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
     </div>
 
     <p
-      v-else-if="queryError"
+      v-else-if="queryError && sessionRecords.length === 0"
       role="alert"
       class="mt-5 rounded-lg bg-rose-50 p-4 text-sm text-rose-700"
     >
@@ -377,7 +364,7 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
     </p>
 
     <p
-      v-else-if="!filteredRecords.length"
+      v-else-if="sessionRecords.length === 0"
       class="mt-5 rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-500"
     >
       {{
@@ -387,10 +374,12 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
       }}
     </p>
 
+    <!-- ============================================ -->
     <!-- 수업 이력 카드 목록 -->
+    <!-- ============================================ -->
     <div v-else class="mt-5 space-y-3">
       <article
-        v-for="record in visibleRecords"
+        v-for="record in sessionRecords"
         :key="record.attendanceId"
         class="rounded-xl border border-slate-200 p-4"
       >
@@ -428,13 +417,17 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
           <span class="text-xs text-slate-500">{{ record.companyName }}</span>
         </div>
 
+        <!-- ============================================ -->
         <!-- 수업 공통 계획 -->
+        <!-- ============================================ -->
         <div v-if="record.sessionNotes" class="mt-4">
           <p class="mb-1 text-xs font-semibold text-slate-500">수업 계획</p>
           <p class="whitespace-pre-wrap text-sm text-slate-700">{{ record.sessionNotes }}</p>
         </div>
 
+        <!-- ============================================ -->
         <!-- 회원별 실제 운동 기록 -->
+        <!-- ============================================ -->
         <div class="mt-4 rounded-lg bg-slate-50 p-3">
           <div class="flex items-center justify-between gap-2">
             <p class="text-xs font-semibold text-slate-600">실제 운동 기록</p>
@@ -458,7 +451,9 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
             {{ record.workoutNotes || '작성된 운동 기록이 없습니다.' }}
           </p>
 
+          <!-- ============================================ -->
           <!-- 운동 기록 수정 폼 -->
+          <!-- ============================================ -->
           <div v-else class="mt-3">
             <textarea
               v-model="editWorkoutNotes"
@@ -508,22 +503,27 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
         </div>
       </article>
 
+      <!-- ============================================ -->
       <!-- 이전 수업 더 보기 -->
+      <!-- ============================================ -->
+      <p v-if="isFetchNextPageError" role="alert" class="text-center text-xs text-rose-600">
+        이전 수업을 불러오지 못했습니다. 다시 시도해 주세요.
+      </p>
+
       <button
         v-if="hasMoreRecords"
         type="button"
-        class="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 py-3 text-sm font-medium text-slate-600 hover:bg-slate-50"
+        :disabled="isFetchingNextPage || isSaving"
+        class="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 py-3 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
         @click="showMoreRecords"
       >
-        <ChevronDown :size="16" />
-        이전 수업 더 보기
+        <LoaderCircle v-if="isFetchingNextPage" :size="16" class="animate-spin" />
+        <ChevronDown v-else :size="16" />
+        {{ isFetchingNextPage ? '불러오는 중...' : '이전 수업 5개 더 보기' }}
       </button>
 
-      <p
-        v-if="sessionRecords && sessionRecords.length >= 100"
-        class="text-center text-xs text-slate-400"
-      >
-        현재 최근 등록된 수업 100건까지 조회합니다.
+      <p v-if="!isCompaniesLoading && !companiesError" class="text-center text-xs text-slate-400">
+        {{ sessionRecords.length }} / {{ filteredTotalCount }}개 불러옴
       </p>
     </div>
   </section>

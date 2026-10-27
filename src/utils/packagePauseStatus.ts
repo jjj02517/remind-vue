@@ -1,3 +1,4 @@
+import { getTodayString } from '@/utils/date'
 import type { PackagePause } from '@/api/packagePauses'
 
 // 일시정지 상태 타입
@@ -10,17 +11,6 @@ const statusLabels: Record<PackagePauseStatus, string> = {
   completed: '일시정지 종료',
   resumed: '조기 복귀',
   cancelled: '예약 취소',
-}
-
-// 오늘 날짜를 YYYY-MM-DD 형식으로 반환
-function getTodayString(): string {
-  const now = new Date()
-
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
 }
 
 // 일시정지 상태 자동 계산

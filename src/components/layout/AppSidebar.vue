@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Dumbbell, LayoutDashboard, Users, CalendarDays, LogOut } from 'lucide-vue-next'
+import { Dumbbell, LayoutDashboard, Users, Building2, CalendarDays, LogOut } from 'lucide-vue-next'
 
 // 메뉴 선택 및 로그아웃 이벤트
 const emit = defineEmits<{
@@ -10,12 +10,13 @@ const emit = defineEmits<{
 const menus = [
   { name: '대시보드', icon: LayoutDashboard, path: '/' },
   { name: '회원 관리', icon: Users, path: '/members' },
+  { name: '근무처 관리', icon: Building2, path: '/companies' },
   { name: '수업 관리', icon: CalendarDays, path: '/sessions' },
 ]
 </script>
 
 <template>
-  <aside class="flex h-screen w-64 flex-col border-r border-slate-200 bg-white">
+  <aside class="flex h-full w-64 flex-col border-r border-slate-200 bg-white">
     <!-- 로고 -->
     <div class="flex h-20 items-center gap-2 border-b border-slate-200 px-6">
       <Dumbbell :size="24" class="text-blue-600" />

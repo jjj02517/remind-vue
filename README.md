@@ -1,54 +1,14 @@
-# remind-vue
+# Archive
 
-This template should help get you started developing with Vue 3 in Vite.
+이 폴더는 Remind PT 개발 과정에서 사용했던 이전 코드를 보관합니다.
 
-## Recommended IDE Setup
+현재 애플리케이션에서 사용하지 않는 코드이며, 참고 및 개발 기록 보존을 목적으로 관리합니다.
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+## legacy/members.ts
 
-## Recommended Browser Setup
+- 기존 Pinia 기반 회원 관리 스토어
+- 근무처 기능 도입 이전의 회원 및 PT 이용권 등록 로직
+- 현재 화면에서는 사용하지 않음
+- 신규 기능 구현에 직접 사용하지 않을 것
 
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
-
-## Type Support for `.vue` Imports in TS
-
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) to make the TypeScript language service aware of `.vue` types.
-
-## Customize configuration
-
-See [Vite Configuration Reference](https://vite.dev/config/).
-
-## Project Setup
-
-```sh
-npm install
-```
-
-### Compile and Hot-Reload for Development
-
-```sh
-npm run dev
-```
-
-### Type-Check, Compile and Minify for Production
-
-```sh
-npm run build
-```
-
-### Run Unit Tests with [Vitest](https://vitest.dev/)
-
-```sh
-npm run test:unit
-```
-
-### Lint with [ESLint](https://eslint.org/)
-
-```sh
-npm run lint
-```
+과거 코드는 참고용으로만 유지하고, 실제 서비스 로직은 `src/` 디렉터리에서 관리합니다.

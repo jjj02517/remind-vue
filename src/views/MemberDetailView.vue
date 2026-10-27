@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ArrowLeft } from 'lucide-vue-next'
-import { useQuery } from '@tanstack/vue-query'
+import { ArrowLeft, Download, LoaderCircle } from 'lucide-vue-next'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 
 import { supabase } from '@/lib/supabase'
+import { getCompanies } from '@/api/companies'
+import type { Company } from '@/api/companies'
+import { getMemberExport } from '@/api/memberExports'
+import { downloadMemberExcel } from '@/utils/memberExportExcel'
+import { getTodayString } from '@/utils/date'
 import { formatPhone } from '@/utils/phone'
 import { getMemberStatus } from '@/utils/memberStatus'
 import type { MemberStatus } from '@/utils/memberStatus'
@@ -12,6 +17,7 @@ import type { MemberStatus } from '@/utils/memberStatus'
 import MemberPackageCard from '@/components/members/MemberPackageCard.vue'
 import AddPackageDialog from '@/components/members/dialogs/AddPackageDialog.vue'
 import EditMemberDialog from '@/components/members/dialogs/EditMemberDialog.vue'
+import MemberSessionHistory from '@/components/members/MemberSessionHistory.vue'
 
 // 회원 상세 화면 데이터 타입
 interface MemberDetailData {
@@ -101,6 +107,7 @@ const {
         `
         id,
         member_id,
+        company_id,
         package_type,
         usage_type,
         total_sessions,
@@ -136,6 +143,173 @@ const {
   staleTime: 1000 * 60 * 5,
 })
 
+// TanStack Query로 회원의 소속 근무처 조회
+const {
+  data: memberCompanies,
+  isPending: isCompaniesLoading,
+  error: companiesError,
+} = useQuery({
+  // 회원 ID별로 소속 근무처 캐시 구분
+  queryKey: computed(() => ['member-companies', trainerId.value, memberId.value]),
+
+  // 회원과 연결된 근무처를 조회 (보관된 근무처도 이력으로 표시)
+  queryFn: async (): Promise<Company[]> => {
+    const { data: links, error } = await supabase
+      .from('company_members')
+      .select('company_id')
+      .eq('trainer_id', trainerId.value!)
+      .eq('member_id', memberId.value)
+
+    if (error) throw error
+
+    const companyIds = (links ?? []).map((link) => link.company_id)
+    if (!companyIds.length) return []
+
+    // 근무처 이름과 보관 여부 조회
+    const companies = await getCompanies()
+    return companies.filter((company) => companyIds.includes(company.id))
+  },
+
+  // 로그인 상태이고 올바른 UUID일 때만 조회
+  enabled: computed(() => !!trainerId.value && isValidMemberId.value),
+
+  // 5분 동안 데이터를 최신 상태로 간주
+  staleTime: 1000 * 60 * 5,
+})
+
+// 근무처 연결 작업 후 회원 소속 목록 캐시 갱신
+const queryClient = useQueryClient()
+
+// 근무처 추가 연결 폼 상태
+const isCompanyLinkFormOpen = ref(false)
+const selectedCompanyId = ref('')
+const companyLinkError = ref('')
+
+// 추가 연결에 사용할 전체 근무처 목록 조회
+const {
+  data: allCompanies,
+  isPending: isAllCompaniesLoading,
+  error: allCompaniesError,
+} = useQuery({
+  queryKey: ['companies'],
+  queryFn: getCompanies,
+  enabled: computed(() => !!trainerId.value && isValidMemberId.value),
+  staleTime: 1000 * 60 * 5,
+})
+
+// 이미 연결되어 있거나 보관된 근무처는 선택 목록에서 제외
+const availableCompanies = computed(() => {
+  const linkedCompanyIds = new Set((memberCompanies.value ?? []).map((company) => company.id))
+
+  return (allCompanies.value ?? []).filter(
+    (company) => company.is_active && !linkedCompanyIds.has(company.id),
+  )
+})
+
+// 이용권의 근무처 ID로 이름을 찾기 위한 조회 결과
+const companyNameById = computed(
+  () => new Map((allCompanies.value ?? []).map((company) => [company.id, company.name])),
+)
+
+// 이용권 근무처 필터 (전체 근무처 또는 특정 근무처)
+const packageCompanyFilter = ref('all')
+
+// 이 회원과 연결되어 있거나 이용권 이력이 있는 근무처만 필터에 표시
+// 보관된 근무처도 지난 이용권 조회를 위해 포함
+const packageFilterCompanies = computed(() => {
+  const companyIds = new Set<string>()
+
+  for (const company of memberCompanies.value ?? []) {
+    companyIds.add(company.id)
+  }
+
+  for (const pkg of dbPackages.value ?? []) {
+    if (pkg.company_id) companyIds.add(pkg.company_id)
+  }
+
+  return (allCompanies.value ?? []).filter((company) => companyIds.has(company.id))
+})
+
+// 근무처 선택 결과: 전체 이용권은 유지하고 화면에 표시할 이용권만 필터링
+const filteredPackages = computed(() => {
+  if (packageCompanyFilter.value === 'all') return dbPackages.value ?? []
+
+  return (dbPackages.value ?? []).filter((pkg) => pkg.company_id === packageCompanyFilter.value)
+})
+
+// 이용권별 근무처 이름 표시
+function getPackageCompanyName(companyId: string | null): string | null {
+  // 이전 데이터에 근무처가 지정되지 않은 경우
+  if (!companyId) return '근무처 미지정'
+
+  // 근무처 목록 조회 중에는 이름을 표시하지 않음
+  if (isAllCompaniesLoading.value) return null
+
+  // 조회 실패 또는 근무처가 목록에 없는 경우 다른 이름으로 추정하지 않음
+  return companyNameById.value.get(companyId) ?? '근무처 확인 필요'
+}
+
+// 기존 회원을 선택한 근무처에 연결
+const { mutateAsync: linkMemberToCompany, isPending: isLinkingCompany } = useMutation({
+  mutationFn: async (companyId: string) => {
+    const { error } = await supabase.rpc('link_member_to_company', {
+      p_member_id: memberId.value,
+      p_company_id: companyId,
+    })
+
+    if (error) throw error
+  },
+  onSuccess: async () => {
+    // 소속 근무처 목록을 갱신해 새 근무처를 바로 표시
+    await queryClient.invalidateQueries({
+      queryKey: ['member-companies', trainerId.value, memberId.value],
+    })
+
+    // 추후 회원 목록의 근무처 필터에서도 최신 연결을 반영
+    await queryClient.invalidateQueries({ queryKey: ['members'] })
+  },
+})
+
+// 근무처 연결 폼 열기 또는 닫기
+function toggleCompanyLinkForm() {
+  if (isLinkingCompany.value) return
+
+  companyLinkError.value = ''
+  isCompanyLinkFormOpen.value = !isCompanyLinkFormOpen.value
+
+  if (isCompanyLinkFormOpen.value) {
+    // 사용 가능한 첫 번째 근무처를 기본 선택
+    selectedCompanyId.value = availableCompanies.value[0]?.id ?? ''
+  }
+}
+
+// 선택한 근무처에 회원 연결
+async function submitCompanyLink() {
+  const companyId = selectedCompanyId.value
+
+  // 조회된 활성 근무처 중 아직 연결되지 않은 근무처만 등록
+  if (!availableCompanies.value.some((company) => company.id === companyId)) return
+  if (isLinkingCompany.value) return
+
+  companyLinkError.value = ''
+
+  try {
+    await linkMemberToCompany(companyId)
+    selectedCompanyId.value = ''
+    isCompanyLinkFormOpen.value = false
+  } catch (error) {
+    console.error('근무처 추가 연결 오류:', error)
+
+    // 다른 화면 등에서 동시에 같은 연결을 생성한 경우
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      companyLinkError.value = '이미 연결된 근무처입니다. 새로고침 후 확인해 주세요.'
+    } else {
+      companyLinkError.value =
+        error instanceof Error ? error.message : '근무처 연결에 실패했습니다.'
+    }
+  }
+}
+
 // 회원 ID로 회원 정보 조회
 const member = computed<MemberDetailData | undefined>(() => {
   // Supabase 회원 정보가 없는 경우
@@ -151,16 +325,6 @@ const member = computed<MemberDetailData | undefined>(() => {
     status,
   }
 })
-
-// 브라우저 현지 날짜를 YYYY-MM-DD로 반환
-function getTodayString(): string {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
-}
 
 // 현재 또는 이용 예정 이용권 여부 판단
 // 완료·만료·취소된 이용권은 지난 내역으로 분리
@@ -197,14 +361,14 @@ function isCurrentPackage(
 const currentPackages = computed(() => {
   const today = getTodayString()
 
-  return (dbPackages.value ?? []).filter((pkg) => isCurrentPackage(pkg, today))
+  return filteredPackages.value.filter((pkg) => isCurrentPackage(pkg, today))
 })
 
 // 사용 완료·기간 만료·취소된 지난 이용권
 const pastPackages = computed(() => {
   const today = getTodayString()
 
-  return (dbPackages.value ?? []).filter((pkg) => !isCurrentPackage(pkg, today))
+  return filteredPackages.value.filter((pkg) => !isCurrentPackage(pkg, today))
 })
 
 // 지난 이용권 펼침 상태
@@ -232,6 +396,50 @@ const detailError = computed(() => {
   if (packagesError.value) return '이용권을 불러오지 못했습니다.'
   return ''
 })
+
+// 회원 전체 내역 엑셀 다운로드 상태
+const isExporting = ref(false)
+const exportError = ref('')
+
+// 다른 회원으로 이동하면 이전 회원의 다운로드 안내 초기화
+watch(memberId, () => {
+  exportError.value = ''
+})
+
+// 화면 필터와 관계없이 회원의 전체 내역을 새로 조회해 다운로드
+async function downloadMemberHistory() {
+  if (
+    isExporting.value ||
+    isDetailLoading.value ||
+    detailError.value ||
+    !trainerId.value ||
+    !isValidMemberId.value ||
+    !member.value
+  ) {
+    return
+  }
+
+  // 클릭한 시점의 회원 ID를 고정해 사용
+  const selectedMemberId = memberId.value
+  isExporting.value = true
+  exportError.value = ''
+
+  try {
+    const data = await getMemberExport({ memberId: selectedMemberId })
+    await downloadMemberExcel(data)
+  } catch (error) {
+    console.error('회원 내역 엑셀 다운로드 오류:', error)
+
+    if (memberId.value === selectedMemberId) {
+      exportError.value =
+        error instanceof Error
+          ? error.message
+          : '회원 내역을 다운로드하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+    }
+  } finally {
+    isExporting.value = false
+  }
+}
 
 // 회원 상태 표시 이름
 function getMemberStatusLabel(status: MemberStatus) {
@@ -335,14 +543,164 @@ onMounted(async () => {
             </p>
           </div>
 
-          <!-- 회원 정보 수정 -->
-          <button
-            type="button"
-            class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-            @click="openEditDialog"
+          <div class="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <!-- 회원 전체 내역 엑셀 다운로드 -->
+            <button
+              type="button"
+              :disabled="isExporting"
+              :aria-busy="isExporting"
+              class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+              @click="downloadMemberHistory"
+            >
+              <LoaderCircle v-if="isExporting" :size="16" class="animate-spin" aria-hidden="true" />
+              <Download v-else :size="16" aria-hidden="true" />
+              {{ isExporting ? '엑셀 생성 중...' : '회원 내역 다운로드' }}
+            </button>
+
+            <!-- 회원 정보 수정 -->
+            <button
+              type="button"
+              class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              @click="openEditDialog"
+            >
+              정보 수정
+            </button>
+          </div>
+        </div>
+
+        <!-- 회원 엑셀 다운로드 범위 및 결과 안내 -->
+        <p class="mt-3 text-xs text-slate-500">
+          전체 근무처 · 전체 기간의 내역을 엑셀로 내려받습니다.
+        </p>
+        <p v-if="exportError" role="alert" class="mt-2 text-sm text-red-600">
+          {{ exportError }}
+        </p>
+
+        <!-- 회원 소속 근무처 -->
+        <div class="mt-5 border-t border-slate-100 pt-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 class="text-sm font-semibold text-slate-800">소속 근무처</h2>
+
+            <!-- 연결 가능한 근무처가 있을 때만 추가 버튼 표시 -->
+            <button
+              v-if="!isCompaniesLoading && !companiesError && availableCompanies.length"
+              type="button"
+              :disabled="isLinkingCompany"
+              :aria-expanded="isCompanyLinkFormOpen"
+              class="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+              @click="toggleCompanyLinkForm"
+            >
+              {{ isCompanyLinkFormOpen ? '닫기' : '+ 근무처 연결' }}
+            </button>
+          </div>
+
+          <!-- 근무처 조회 중 -->
+          <p v-if="isCompaniesLoading" class="mt-3 text-sm text-slate-500">
+            근무처를 불러오는 중...
+          </p>
+
+          <!-- 근무처 조회 오류 -->
+          <p v-else-if="companiesError" role="alert" class="mt-3 text-sm text-red-600">
+            소속 근무처를 불러오지 못했습니다.
+          </p>
+
+          <!-- 연결된 근무처 없음 -->
+          <p v-else-if="!memberCompanies?.length" class="mt-3 text-sm text-slate-400">
+            연결된 근무처가 없습니다.
+          </p>
+
+          <!-- 소속 근무처 배지 목록 -->
+          <div v-else class="mt-3 flex flex-wrap gap-2">
+            <span
+              v-for="company in memberCompanies"
+              :key="company.id"
+              class="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium"
+              :class="
+                company.is_active
+                  ? company.company_type === 'personal'
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'bg-slate-100 text-slate-700'
+                  : 'bg-slate-100 text-slate-400'
+              "
+            >
+              {{ company.name }}
+              <span v-if="!company.is_active">(보관됨)</span>
+            </span>
+          </div>
+
+          <!-- 근무처 추가 연결 폼 -->
+          <form
+            v-if="isCompanyLinkFormOpen && !isCompaniesLoading && !companiesError"
+            class="mt-4 rounded-xl border border-blue-100 bg-blue-50/50 p-4"
+            @submit.prevent="submitCompanyLink"
           >
-            정보 수정
-          </button>
+            <label for="link-member-company" class="mb-2 block text-sm font-medium text-slate-700">
+              추가로 연결할 근무처
+            </label>
+
+            <!-- 아직 연결되지 않은 활성 근무처 선택 -->
+            <select
+              id="link-member-company"
+              v-model="selectedCompanyId"
+              required
+              :disabled="isLinkingCompany || isAllCompaniesLoading || !!allCompaniesError"
+              class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
+            >
+              <option v-for="company in availableCompanies" :key="company.id" :value="company.id">
+                {{ company.name }}
+              </option>
+            </select>
+
+            <p class="mt-2 text-xs text-slate-500">
+              회원 정보는 중복 생성하지 않고 근무처 소속만 추가합니다.
+            </p>
+
+            <!-- 근무처 추가 연결 오류 -->
+            <p v-if="companyLinkError" role="alert" class="mt-3 text-sm text-red-600">
+              {{ companyLinkError }}
+            </p>
+
+            <div class="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                :disabled="isLinkingCompany"
+                class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                @click="toggleCompanyLinkForm"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                :disabled="
+                  isLinkingCompany ||
+                  !availableCompanies.some((company) => company.id === selectedCompanyId)
+                "
+                class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {{ isLinkingCompany ? '연결 중...' : '근무처 연결' }}
+              </button>
+            </div>
+          </form>
+
+          <!-- 추가 가능한 근무처 없음 또는 목록 조회 오류 -->
+          <p
+            v-else-if="!isAllCompaniesLoading && allCompaniesError"
+            role="alert"
+            class="mt-3 text-xs text-red-600"
+          >
+            추가 가능한 근무처 목록을 불러오지 못했습니다.
+          </p>
+          <p
+            v-else-if="
+              !isAllCompaniesLoading &&
+              !isCompaniesLoading &&
+              !companiesError &&
+              !availableCompanies.length
+            "
+            class="mt-3 text-xs text-slate-500"
+          >
+            추가로 연결할 수 있는 활성 근무처가 없습니다.
+          </p>
         </div>
       </section>
 
@@ -367,12 +725,55 @@ onMounted(async () => {
           </button>
         </div>
 
-        <!-- 등록된 이용권 없음 -->
+        <!-- 근무처별 이용권 필터 -->
+        <div class="mt-5 flex flex-wrap items-end justify-between gap-3">
+          <div class="w-full sm:w-72">
+            <label
+              for="package-company-filter"
+              class="mb-2 block text-sm font-medium text-slate-700"
+            >
+              근무처별 이용권 보기
+            </label>
+            <select
+              id="package-company-filter"
+              v-model="packageCompanyFilter"
+              :disabled="isAllCompaniesLoading || !!allCompaniesError || isCompaniesLoading"
+              class="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="all">전체 근무처</option>
+              <option
+                v-for="company in packageFilterCompanies"
+                :key="company.id"
+                :value="company.id"
+              >
+                {{ company.name }}{{ company.is_active ? '' : ' (보관됨)' }}
+              </option>
+            </select>
+            <p
+              v-if="allCompaniesError || companiesError"
+              role="alert"
+              class="mt-2 text-xs text-red-600"
+            >
+              근무처 필터 목록을 불러오지 못했습니다.
+            </p>
+          </div>
+          <p v-if="packageCompanyFilter !== 'all'" class="text-sm text-slate-500">
+            선택한 근무처의 이용권: {{ filteredPackages.length }}개
+          </p>
+        </div>
+
+        <!-- 선택한 근무처에 등록된 이용권 없음 -->
         <div
-          v-if="!dbPackages?.length"
+          v-if="!filteredPackages.length"
           class="mt-5 rounded-xl border border-slate-200 bg-white px-6 py-12 text-center"
         >
-          <p class="text-sm text-slate-500">등록된 이용권이 없습니다.</p>
+          <p class="text-sm text-slate-500">
+            {{
+              packageCompanyFilter === 'all'
+                ? '등록된 이용권이 없습니다.'
+                : '선택한 근무처에 등록된 이용권이 없습니다.'
+            }}
+          </p>
         </div>
 
         <template v-else>
@@ -395,7 +796,12 @@ onMounted(async () => {
 
             <!-- 현재 및 이용 예정 이용권 카드 -->
             <div v-else class="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-              <MemberPackageCard v-for="pkg in currentPackages" :key="pkg.id" :pkg="pkg" />
+              <MemberPackageCard
+                v-for="pkg in currentPackages"
+                :key="pkg.id"
+                :pkg="pkg"
+                :company-name="getPackageCompanyName(pkg.company_id)"
+              />
             </div>
           </div>
 
@@ -425,11 +831,19 @@ onMounted(async () => {
               v-if="showPastPackages"
               class="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-2"
             >
-              <MemberPackageCard v-for="pkg in pastPackages" :key="pkg.id" :pkg="pkg" />
+              <MemberPackageCard
+                v-for="pkg in pastPackages"
+                :key="pkg.id"
+                :pkg="pkg"
+                :company-name="getPackageCompanyName(pkg.company_id)"
+              />
             </div>
           </div>
         </template>
       </section>
+
+      <!-- 회원별 수업 이력 -->
+      <MemberSessionHistory :member-id="member.id" />
 
       <!-- 공통 이용권 추가 모달 -->
       <AddPackageDialog ref="packageDialog" :member-id="member.id" />

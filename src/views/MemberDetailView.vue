@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ArrowLeft } from 'lucide-vue-next'
+import { ArrowLeft, Download, LoaderCircle } from 'lucide-vue-next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 
 import { supabase } from '@/lib/supabase'
 import { getCompanies } from '@/api/companies'
 import type { Company } from '@/api/companies'
+import { getMemberExport } from '@/api/memberExports'
+import { downloadMemberExcel } from '@/utils/memberExportExcel'
 import { getTodayString } from '@/utils/date'
 import { formatPhone } from '@/utils/phone'
 import { getMemberStatus } from '@/utils/memberStatus'
@@ -395,6 +397,50 @@ const detailError = computed(() => {
   return ''
 })
 
+// 회원 전체 내역 엑셀 다운로드 상태
+const isExporting = ref(false)
+const exportError = ref('')
+
+// 다른 회원으로 이동하면 이전 회원의 다운로드 안내 초기화
+watch(memberId, () => {
+  exportError.value = ''
+})
+
+// 화면 필터와 관계없이 회원의 전체 내역을 새로 조회해 다운로드
+async function downloadMemberHistory() {
+  if (
+    isExporting.value ||
+    isDetailLoading.value ||
+    detailError.value ||
+    !trainerId.value ||
+    !isValidMemberId.value ||
+    !member.value
+  ) {
+    return
+  }
+
+  // 클릭한 시점의 회원 ID를 고정해 사용
+  const selectedMemberId = memberId.value
+  isExporting.value = true
+  exportError.value = ''
+
+  try {
+    const data = await getMemberExport({ memberId: selectedMemberId })
+    await downloadMemberExcel(data)
+  } catch (error) {
+    console.error('회원 내역 엑셀 다운로드 오류:', error)
+
+    if (memberId.value === selectedMemberId) {
+      exportError.value =
+        error instanceof Error
+          ? error.message
+          : '회원 내역을 다운로드하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+    }
+  } finally {
+    isExporting.value = false
+  }
+}
+
 // 회원 상태 표시 이름
 function getMemberStatusLabel(status: MemberStatus) {
   const statusLabels: Record<MemberStatus, string> = {
@@ -497,15 +543,38 @@ onMounted(async () => {
             </p>
           </div>
 
-          <!-- 회원 정보 수정 -->
-          <button
-            type="button"
-            class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-            @click="openEditDialog"
-          >
-            정보 수정
-          </button>
+          <div class="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <!-- 회원 전체 내역 엑셀 다운로드 -->
+            <button
+              type="button"
+              :disabled="isExporting"
+              :aria-busy="isExporting"
+              class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+              @click="downloadMemberHistory"
+            >
+              <LoaderCircle v-if="isExporting" :size="16" class="animate-spin" aria-hidden="true" />
+              <Download v-else :size="16" aria-hidden="true" />
+              {{ isExporting ? '엑셀 생성 중...' : '회원 내역 다운로드' }}
+            </button>
+
+            <!-- 회원 정보 수정 -->
+            <button
+              type="button"
+              class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              @click="openEditDialog"
+            >
+              정보 수정
+            </button>
+          </div>
         </div>
+
+        <!-- 회원 엑셀 다운로드 범위 및 결과 안내 -->
+        <p class="mt-3 text-xs text-slate-500">
+          전체 근무처 · 전체 기간의 내역을 엑셀로 내려받습니다.
+        </p>
+        <p v-if="exportError" role="alert" class="mt-2 text-sm text-red-600">
+          {{ exportError }}
+        </p>
 
         <!-- 회원 소속 근무처 -->
         <div class="mt-5 border-t border-slate-100 pt-4">

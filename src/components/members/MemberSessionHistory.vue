@@ -546,7 +546,7 @@ async function saveWorkoutNotes(record: MemberSessionRecord) {
       </button>
 
       <p v-if="!isCompaniesLoading && !companiesError" class="text-center text-xs text-slate-400">
-        {{ sessionRecords.length }} / {{ filteredTotalCount }}개 불러옴
+        {{ sessionRecords.length }} / {{ filteredTotalCount }}개
       </p>
     </div>
   </section>

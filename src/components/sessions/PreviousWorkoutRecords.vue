@@ -222,7 +222,7 @@ async function showMoreRecords() {
         {{ isFetchingNextPage ? '불러오는 중...' : '이전 운동 기록 3개 더 보기' }}
       </button>
 
-      <p class="mt-3 text-center text-xs text-slate-400">{{ records.length }}건 불러옴</p>
+      <p class="mt-3 text-center text-xs text-slate-400">{{ records.length }}건</p>
     </div>
   </section>
 </template>

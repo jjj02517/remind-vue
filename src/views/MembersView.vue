@@ -12,7 +12,7 @@ import { getCompanies } from '@/api/companies'
 import { supabase } from '@/lib/supabase'
 
 // 회원 상태 필터 타입
-type MemberStatusFilter = 'all' | 'active' | 'inactive'
+type MemberStatusFilter = 'all' | 'active' | 'inactive' | 'archived'
 
 // 로그인한 트레이너 ID
 const trainerId = ref<string | null>(null)
@@ -154,6 +154,7 @@ const companiesByMemberId = computed<Record<string, MemberCompanyBadge[]>>(() =>
     if (!company) continue
 
     const badges = (result[link.member_id] ??= [])
+
     // 중복 연결이 존재해도 같은 근무처는 한 번만 표시
     if (badges.some((badge) => badge.id === company.id)) continue
 
@@ -183,6 +184,7 @@ const statusFilterOptions: {
   { value: 'all', label: '전체' },
   { value: 'active', label: '활동 중' },
   { value: 'inactive', label: '비활성' },
+  { value: 'archived', label: '보관 회원' },
 ]
 
 // 회원 상태 필터 변경
@@ -190,21 +192,31 @@ function changeStatusFilter(status: MemberStatusFilter) {
   statusFilter.value = status
 }
 
+// 현재 선택한 상태 필터의 전체 회원 수
+const statusFilteredMemberCount = computed(() => {
+  return (dbMembers.value ?? []).filter((member) => {
+    // 전체에서는 보관 회원 제외
+    if (statusFilter.value === 'all') {
+      return member.status !== 'archived'
+    }
+
+    // 나머지는 선택한 상태와 일치하는 회원만 포함
+    return member.status === statusFilter.value
+  }).length
+})
+
 // 검색어, 회원 상태 및 근무처에 따라 필터링된 회원 목록
 const filteredMembers = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase()
   const phoneKeyword = normalizePhone(keyword)
 
   return (dbMembers.value ?? []).filter((member) => {
-    // 보관 회원은 기본 목록에서 제외
-    if (member.status === 'archived') {
+    // 전체에서는 보관 회원을 제외하고, 보관 회원 탭에서는 보관 회원만 표시
+    if (statusFilter.value === 'all') {
+      if (member.status === 'archived') return false
+    } else if (member.status !== statusFilter.value) {
       return false
     }
-
-    // 선택한 회원 상태와 일치하는지 확인
-    const matchesStatus = statusFilter.value === 'all' || member.status === statusFilter.value
-
-    if (!matchesStatus) return false
 
     // 선택한 근무처에 연결된 회원만 표시
     if (
@@ -267,6 +279,7 @@ onMounted(async () => {
         <h1 class="text-2xl font-bold text-slate-900">회원 관리</h1>
         <p class="mt-2 text-sm text-slate-500">회원 정보와 이용권을 관리합니다.</p>
       </div>
+
       <button
         type="button"
         class="w-full rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 sm:w-auto"
@@ -284,14 +297,14 @@ onMounted(async () => {
       <div
         role="group"
         aria-label="회원 상태 필터"
-        class="inline-flex w-full rounded-xl bg-slate-100 p-1 sm:w-auto"
+        class="grid w-full grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 sm:inline-flex sm:w-auto"
       >
         <button
           v-for="option in statusFilterOptions"
           :key="option.value"
           type="button"
           :aria-pressed="statusFilter === option.value"
-          class="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors sm:min-w-24 sm:flex-none"
+          class="rounded-lg px-4 py-2.5 text-sm font-medium transition-colors sm:min-w-24"
           :class="
             statusFilter === option.value
               ? 'bg-white text-blue-600 shadow-sm'
@@ -309,6 +322,7 @@ onMounted(async () => {
       <label for="member-company-filter" class="mb-2 block text-sm font-medium text-slate-700">
         근무처
       </label>
+
       <select
         id="member-company-filter"
         v-model="companyFilter"
@@ -320,6 +334,7 @@ onMounted(async () => {
           {{ company.name }}
         </option>
       </select>
+
       <p class="mt-1 text-xs text-slate-500">
         여러 근무처에 소속된 회원도 목록에는 한 번만 표시됩니다.
       </p>
@@ -339,7 +354,13 @@ onMounted(async () => {
       <p v-else class="text-slate-600">
         표시 중인 회원: {{ filteredMembers.length }}명
         <span class="text-slate-400">
-          / 전체 {{ (dbMembers ?? []).filter((member) => member.status !== 'archived').length }}명
+          /
+          {{
+            statusFilter === 'all'
+              ? '관리 중 전체'
+              : statusFilterOptions.find((option) => option.value === statusFilter)?.label
+          }}
+          {{ statusFilteredMemberCount }}명
         </span>
       </p>
     </div>

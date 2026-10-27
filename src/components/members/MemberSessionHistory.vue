@@ -109,11 +109,13 @@ const {
     })
     if (error) throw error
 
-    return (data ?? []).map((company) => ({
-      id: company.company_id,
-      name: company.company_name,
-      count: Number(company.session_count),
-    }))
+    return (data ?? []).map(
+      (company: { company_id: string; company_name: string; session_count: string }) => ({
+        id: company.company_id,
+        name: company.company_name,
+        count: Number(company.session_count),
+      }),
+    )
   },
   refetchOnMount: 'always',
   staleTime: 1000 * 60,
@@ -124,9 +126,17 @@ const companyOptions = computed(() => historyCompanies.value ?? [])
 // 현재 선택한 근무처의 전체 수업 개수 (아직 불러오지 않은 수업 포함)
 const filteredTotalCount = computed(() => {
   if (selectedCompanyId.value === 'all') {
-    return companyOptions.value.reduce((sum, company) => sum + company.count, 0)
+    return companyOptions.value.reduce(
+      (sum: number, company: { id: string; name: string; count: number }) => sum + company.count,
+      0,
+    )
   }
-  return companyOptions.value.find((company) => company.id === selectedCompanyId.value)?.count ?? 0
+  return (
+    companyOptions.value.find(
+      (company: { id: string; name: string; count: number }) =>
+        company.id === selectedCompanyId.value,
+    )?.count ?? 0
+  )
 })
 
 // ============================================
@@ -156,18 +166,31 @@ const {
 
     if (error) throw error
 
-    return (data ?? []).map((record) => ({
-      attendanceId: record.attendance_id,
-      sessionId: record.session_id,
-      startsAt: record.starts_at,
-      endsAt: record.ends_at,
-      sessionType: record.session_type as SessionType,
-      attendanceStatus: record.attendance_status as AttendanceStatus,
-      companyId: record.company_id,
-      companyName: record.company_name,
-      sessionNotes: record.session_notes,
-      workoutNotes: record.workout_notes,
-    }))
+    return (data ?? []).map(
+      (record: {
+        attendance_id: string
+        session_id: string
+        starts_at: string
+        ends_at: string
+        session_type: SessionType
+        attendance_status: AttendanceStatus
+        company_id: string
+        company_name: string
+        session_notes: string | null
+        workout_notes: string | null
+      }) => ({
+        attendanceId: record.attendance_id,
+        sessionId: record.session_id,
+        startsAt: record.starts_at,
+        endsAt: record.ends_at,
+        sessionType: record.session_type as SessionType,
+        attendanceStatus: record.attendance_status as AttendanceStatus,
+        companyId: record.company_id,
+        companyName: record.company_name,
+        sessionNotes: record.session_notes,
+        workoutNotes: record.workout_notes,
+      }),
+    )
   },
   // 5건을 모두 가져왔을 때 다음 페이지가 있을 수 있음.
   // 마지막 페이지가 5건으로 끝나도 전체 건수와 비교해 버튼을 숨김.

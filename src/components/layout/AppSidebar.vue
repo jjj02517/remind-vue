@@ -16,7 +16,7 @@ const menus = [
 </script>
 
 <template>
-  <aside class="flex h-screen w-64 flex-col border-r border-slate-200 bg-white">
+  <aside class="flex h-full w-64 flex-col border-r border-slate-200 bg-white">
     <!-- 로고 -->
     <div class="flex h-20 items-center gap-2 border-b border-slate-200 px-6">
       <Dumbbell :size="24" class="text-blue-600" />

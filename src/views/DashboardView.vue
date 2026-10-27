@@ -1,9 +1,22 @@
-<template>
-  <div>
-    <!-- 페이지 제목 -->
-    <h1 class="text-3xl font-bold text-slate-900">대시보드</h1>
+<script setup lang="ts">
+import DashboardMonthlySessions from '@/components/dashboard/DashboardMonthlySessions.vue'
+import DashboardOverviewCards from '@/components/dashboard/DashboardOverviewCards.vue'
+import DashboardTodaySessions from '@/components/dashboard/DashboardTodaySessions.vue'
+import DashboardPackageAlerts from '@/components/dashboard/DashboardPackageAlerts.vue'
+</script>
 
-    <!-- 페이지 설명 -->
-    <p class="mt-2 text-slate-500">오늘도 좋은 하루 보내세요!</p>
+<template>
+  <div class="space-y-6">
+    <!-- 회원·근무처·이용권 운영 현황-->
+    <DashboardOverviewCards />
+
+    <!-- 월별 수업 통계 -->
+    <DashboardMonthlySessions />
+
+    <!-- 오늘 수업 통계 -->
+    <DashboardTodaySessions />
+
+    <!-- 이용권 알림 -->
+    <DashboardPackageAlerts />
   </div>
 </template>

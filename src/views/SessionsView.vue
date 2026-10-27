@@ -289,13 +289,12 @@ function getSessionStatusClass(status: CalendarSession['status']) {
 
 <template>
   <div class="space-y-6">
-    <!-- ============================================ -->
-    <!-- 페이지 제목 -->
-    <!-- ============================================ -->
     <div>
-      <h1 class="text-3xl font-bold text-slate-900">수업 관리</h1>
+      <h1 class="text-2xl font-bold text-slate-900">수업 관리</h1>
 
-      <p class="mt-2 text-slate-500">달력에서 날짜를 선택해 PT·그룹 수업 일정을 확인하세요.</p>
+      <p class="mt-2 text-sm text-slate-500">
+        달력에서 날짜를 선택해 PT·그룹 수업 일정을 확인하세요.
+      </p>
     </div>
 
     <!-- ============================================ -->

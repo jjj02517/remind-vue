@@ -262,14 +262,11 @@ onMounted(async () => {
 
 <template>
   <div>
-    <!-- 페이지 제목 -->
-    <h1 class="text-3xl font-bold text-slate-900">회원 관리</h1>
-
-    <!-- 페이지 설명 -->
-    <p class="mt-2 text-slate-500">회원 정보와 이용권을 관리합니다.</p>
-
-    <!-- 회원 등록 -->
-    <div class="mt-6 flex justify-end">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold text-slate-900">회원 관리</h1>
+        <p class="mt-2 text-sm text-slate-500">회원 정보와 이용권을 관리합니다.</p>
+      </div>
       <button
         type="button"
         class="w-full rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 sm:w-auto"

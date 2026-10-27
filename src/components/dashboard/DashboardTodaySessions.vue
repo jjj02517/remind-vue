@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import {
@@ -12,6 +12,7 @@ import {
 } from 'lucide-vue-next'
 
 import { supabase } from '@/lib/supabase'
+import { getTrainerContext } from '@/api/trainerContext'
 import type { SessionStatus, SessionType } from '@/api/sessions'
 import SessionDetailDialog from '@/components/sessions/SessionDetailDialog.vue'
 
@@ -28,6 +29,35 @@ interface TodaySession {
   title: string
   companyName: string
 }
+
+// ============================================
+// 트레이너 데이터 조회 컨텍스트
+// ============================================
+
+// 일반 사용자: 본인 데이터
+// 데모 방문자: 데모 트레이너의 샘플 데이터
+const trainerContext = ref<{
+  trainerId: string
+  isDemo: boolean
+} | null>(null)
+
+const isContextLoading = ref(true)
+const contextError = ref('')
+
+// 현재 사용자에 맞는 데이터 조회 기준 확인
+onMounted(async () => {
+  try {
+    trainerContext.value = await getTrainerContext()
+  } catch (error) {
+    console.error('오늘의 수업 트레이너 컨텍스트 조회 오류:', error)
+    contextError.value = '트레이너 정보를 확인하지 못했습니다.'
+  } finally {
+    isContextLoading.value = false
+  }
+})
+
+const isContextReady = computed(() => !!trainerContext.value?.trainerId)
+const isDemo = computed(() => trainerContext.value?.isDemo ?? false)
 
 // ============================================
 // 한국 시간 기준 오늘 날짜
@@ -64,7 +94,6 @@ function getTodayBounds() {
 
   return {
     start: new Date(`${todayKey}T00:00:00+09:00`).toISOString(),
-
     end: new Date(`${nextDate}T00:00:00+09:00`).toISOString(),
   }
 }
@@ -84,21 +113,25 @@ const queryClient = useQueryClient()
 
 const {
   data: todaySessions,
-  isPending: isLoading,
+  isPending: isSessionsLoading,
   error: sessionsError,
 } = useQuery({
   // 수업 관리에서 ['sessions'] 캐시를 갱신하면 함께 갱신
-  queryKey: ['sessions', 'dashboard-today', todayKey],
+  // 일반 사용자와 데모 방문자의 캐시를 분리
+  queryKey: computed(
+    () => ['sessions', 'dashboard-today', todayKey, trainerContext.value?.trainerId ?? ''] as const,
+  ),
 
-  queryFn: async (): Promise<TodaySession[]> => {
-    const { data: authData, error: authError } = await supabase.auth.getUser()
+  // 트레이너 정보를 확인한 후 조회
+  enabled: isContextReady,
 
-    if (authError) throw authError
-    if (!authData.user) {
-      throw new Error('로그인이 필요합니다.')
+  queryFn: async ({ queryKey }): Promise<TodaySession[]> => {
+    const [, , , trainerId] = queryKey
+
+    if (!trainerId) {
+      throw new Error('트레이너 정보가 없습니다.')
     }
 
-    const trainerId = authData.user.id
     const bounds = getTodayBounds()
 
     // ============================================
@@ -115,6 +148,7 @@ const {
       .order('starts_at', { ascending: true })
 
     if (sessionError) throw sessionError
+
     if (!sessions?.length) return []
 
     const sessionIds = sessions.map((session) => session.id)
@@ -200,6 +234,19 @@ const {
 })
 
 // ============================================
+// 오늘의 수업 조회 상태
+// ============================================
+
+const isLoading = computed(() => {
+  if (isContextLoading.value) return true
+  if (contextError.value) return false
+
+  return isSessionsLoading.value
+})
+
+const hasError = computed(() => !!contextError.value || !!sessionsError.value)
+
+// ============================================
 // 수업 상태 표시
 // ============================================
 
@@ -232,6 +279,13 @@ const selectedSessionId = ref<string | null>(null)
 
 // 오늘의 수업을 클릭하면 기존 상세 팝업 열기
 function openSessionDetail(sessionId: string) {
+  // 데모에서는 수업 상세 팝업의 조회 및 수정 기능을
+  // 별도로 연결하기 전까지 기존 팝업을 열지 않음
+  if (isDemo.value) {
+    window.alert('데모 수업 상세 기능은 현재 준비 중입니다.')
+    return
+  }
+
   selectedSessionId.value = sessionId
 }
 
@@ -260,6 +314,7 @@ async function handleSessionUpdated() {
       <div>
         <div class="flex items-center gap-2">
           <CalendarDays :size="20" class="text-blue-600" aria-hidden="true" />
+
           <h2 class="text-lg font-semibold text-slate-900">오늘의 수업</h2>
         </div>
 
@@ -267,7 +322,7 @@ async function handleSessionUpdated() {
       </div>
 
       <span
-        v-if="!isLoading && !sessionsError"
+        v-if="!isLoading && !hasError"
         class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600"
       >
         총 {{ sessionCount }}건
@@ -283,10 +338,11 @@ async function handleSessionUpdated() {
     </div>
 
     <p
-      v-else-if="sessionsError"
+      v-else-if="hasError"
       role="alert"
       class="mt-5 rounded-lg bg-rose-50 p-4 text-sm text-rose-700"
     >
+      <CircleAlert :size="18" aria-hidden="true" />
       오늘의 수업을 불러오지 못했습니다.
     </p>
 
@@ -304,6 +360,7 @@ async function handleSessionUpdated() {
           <p class="text-sm font-semibold tabular-nums text-slate-700">
             {{ session.startTime }}
           </p>
+
           <p class="mt-1 text-xs tabular-nums text-slate-400">
             {{ session.endTime }}
           </p>

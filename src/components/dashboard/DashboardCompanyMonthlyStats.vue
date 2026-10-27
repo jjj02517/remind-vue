@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { Building2, CircleAlert, LoaderCircle } from 'lucide-vue-next'
 
 import { supabase } from '@/lib/supabase'
+import { getTrainerContext } from '@/api/trainerContext'
+import type { TrainerContext } from '@/api/trainerContext'
 
 // ============================================
 // Props
@@ -32,6 +34,181 @@ interface CompanyMonthlyStats {
   cancelled_sessions: number
 }
 
+// 데모 근무처 조회 타입
+interface DemoCompany {
+  id: string
+  name: string
+  company_type: string
+  is_active: boolean
+}
+
+// 데모 수업 조회 타입
+interface DemoSession {
+  id: string
+  company_id: string
+  session_type: string
+  status: string
+}
+
+// ============================================
+// 트레이너 데이터 조회 컨텍스트
+// ============================================
+
+// 일반 사용자: 본인 데이터
+// 데모 방문자: 데모 트레이너의 샘플 데이터
+const trainerContext = ref<TrainerContext | null>(null)
+const isContextLoading = ref(true)
+const contextError = ref('')
+
+// 현재 사용자에 맞는 데이터 조회 기준 확인
+onMounted(async () => {
+  try {
+    trainerContext.value = await getTrainerContext()
+  } catch (error) {
+    console.error('근무처별 통계 트레이너 컨텍스트 조회 오류:', error)
+    contextError.value = '트레이너 정보를 확인하지 못했습니다.'
+  } finally {
+    isContextLoading.value = false
+  }
+})
+
+// 트레이너 컨텍스트 확인 후 조회
+const isContextReady = computed(() => !!trainerContext.value?.trainerId)
+
+// ============================================
+// 데모 근무처별 월간 통계 조회
+// ============================================
+
+// 기존 RPC는 auth.uid() 기준으로 조회하므로
+// 데모 방문자는 RLS로 허용된 데모 데이터를 직접 집계
+async function getDemoCompanyMonthlyStats(
+  trainerId: string,
+  year: number,
+  month: number,
+): Promise<CompanyMonthlyStats[]> {
+  // 한국 시간 기준 해당 월의 시작과 다음 달 시작
+  const startIso = new Date(Date.UTC(year, month - 1, 1, -9)).toISOString()
+  const endIso = new Date(Date.UTC(year, month, 1, -9)).toISOString()
+
+  const pageSize = 1000
+
+  // ============================================
+  // 1. 데모 트레이너의 전체 근무처 조회
+  // ============================================
+
+  const companies: DemoCompany[] = []
+
+  // 보관된 근무처 및 기본 개인 고객 근무처도 포함
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('id, name, company_type, is_active')
+      .eq('trainer_id', trainerId)
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1)
+
+    if (error) throw error
+
+    const rows = data ?? []
+    companies.push(...rows)
+
+    if (rows.length < pageSize) break
+  }
+
+  // ============================================
+  // 2. 근무처별 통계 초기값 생성
+  // ============================================
+
+  // 수업이 없는 근무처도 0회로 표시
+  const statsMap = new Map<string, CompanyMonthlyStats>()
+
+  for (const company of companies) {
+    statsMap.set(company.id, {
+      company_id: company.id,
+      company_name: company.name,
+      company_type: company.company_type,
+      is_active: company.is_active,
+      total_sessions: 0,
+      pt_sessions: 0,
+      group_sessions: 0,
+      completed_sessions: 0,
+      scheduled_sessions: 0,
+      cancelled_sessions: 0,
+    })
+  }
+
+  // ============================================
+  // 3. 선택한 월의 데모 수업 조회
+  // ============================================
+
+  const sessions: DemoSession[] = []
+
+  // 삭제된 수업은 제외하고 취소된 수업은 포함
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from('sessions')
+      .select('id, company_id, session_type, status')
+      .eq('trainer_id', trainerId)
+      .is('deleted_at', null)
+      .gte('starts_at', startIso)
+      .lt('starts_at', endIso)
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1)
+
+    if (error) throw error
+
+    const rows = data ?? []
+    sessions.push(...rows)
+
+    if (rows.length < pageSize) break
+  }
+
+  // ============================================
+  // 4. 근무처별 수업 종류 및 상태 집계
+  // ============================================
+
+  for (const session of sessions) {
+    const company = statsMap.get(session.company_id)
+
+    // 조회할 수 없는 근무처 데이터는 집계하지 않음
+    if (!company) continue
+
+    // 전체 수업 횟수
+    company.total_sessions++
+
+    // 수업 종류
+    if (session.session_type === 'pt') {
+      company.pt_sessions++
+    }
+
+    if (session.session_type === 'group') {
+      company.group_sessions++
+    }
+
+    // 수업 진행 상태
+    if (session.status === 'completed') {
+      company.completed_sessions++
+    }
+
+    if (session.status === 'scheduled') {
+      company.scheduled_sessions++
+    }
+
+    if (session.status === 'cancelled') {
+      company.cancelled_sessions++
+    }
+  }
+
+  // ============================================
+  // 5. 근무처별 통계 반환
+  // ============================================
+
+  // 근무처 이름순 정렬
+  return Array.from(statsMap.values()).sort((a, b) =>
+    a.company_name.localeCompare(b.company_name, 'ko-KR'),
+  )
+}
+
 // ============================================
 // Supabase 근무처별 월간 통계 조회
 // ============================================
@@ -39,21 +216,42 @@ interface CompanyMonthlyStats {
 // 수업이 등록·수정·삭제되면 ['sessions'] 캐시 무효화로 갱신
 const {
   data: companyStats,
-  isPending: isLoading,
+  isPending: isStatsLoading,
   isFetching,
   error: statsError,
 } = useQuery({
-  queryKey: computed(() => [
-    'sessions',
-    'dashboard-company-monthly-stats',
-    props.year,
-    props.month,
-  ]),
+  // 트레이너 및 월별 캐시 구분
+  queryKey: computed(
+    () =>
+      [
+        'sessions',
+        'dashboard-company-monthly-stats',
+        trainerContext.value?.trainerId ?? '',
+        trainerContext.value?.isDemo ?? false,
+        props.year,
+        props.month,
+      ] as const,
+  ),
 
-  queryFn: async (): Promise<CompanyMonthlyStats[]> => {
+  enabled: isContextReady,
+
+  queryFn: async ({ queryKey }): Promise<CompanyMonthlyStats[]> => {
+    // 빠르게 월을 전환해도 각 요청의 조회 월 유지
+    const [, , trainerId, demoMode, year, month] = queryKey
+
+    if (!trainerId) {
+      throw new Error('트레이너 정보가 없습니다.')
+    }
+
+    // 데모 방문자: 샘플 데이터를 직접 조회하여 집계
+    if (demoMode) {
+      return getDemoCompanyMonthlyStats(trainerId, year, month)
+    }
+
+    // 일반 사용자: 기존 근무처별 월간 통계 RPC 유지
     const { data, error } = await supabase.rpc('get_dashboard_company_monthly_stats', {
-      p_year: props.year,
-      p_month: props.month,
+      p_year: year,
+      p_month: month,
     })
 
     if (error) {
@@ -65,6 +263,19 @@ const {
 
   staleTime: 1000 * 30,
 })
+
+// ============================================
+// 근무처별 통계 조회 상태
+// ============================================
+
+const isLoading = computed(() => {
+  if (isContextLoading.value) return true
+  if (contextError.value) return false
+
+  return isStatsLoading.value
+})
+
+const hasError = computed(() => !!contextError.value || !!statsError.value)
 
 // ============================================
 // 근무처별 수업 막대그래프 데이터
@@ -137,7 +348,7 @@ const companiesWithSessions = computed(
         <p class="mt-2 text-xs text-slate-500">근무처별 PT·그룹 수업 횟수를 비교합니다.</p>
       </div>
 
-      <p v-if="!isLoading && !statsError" class="text-xs text-slate-500">
+      <p v-if="!isLoading && !hasError" class="text-xs text-slate-500">
         {{ companiesWithSessions }}곳 · 총 {{ totalCompanySessions }}회
       </p>
     </div>
@@ -157,7 +368,7 @@ const companiesWithSessions = computed(
     <!-- 조회 오류 -->
     <!-- ============================================ -->
     <div
-      v-else-if="statsError"
+      v-else-if="hasError"
       role="alert"
       class="mt-5 flex items-center gap-2 rounded-lg bg-rose-50 p-4 text-sm text-rose-700"
     >

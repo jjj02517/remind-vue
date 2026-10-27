@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Dumbbell, X, Eye, EyeOff } from 'lucide-vue-next'
 
@@ -15,7 +15,11 @@ const password = ref('')
 
 // 로그인 상태
 const isLoading = ref(false)
+const isDemoLoading = ref(false)
 const loginError = ref('')
+
+// 로그인 또는 데모 연결 진행 중
+const isBusy = computed(() => isLoading.value || isDemoLoading.value)
 
 // 비밀번호 표시 여부
 const showPassword = ref(false)
@@ -28,7 +32,7 @@ function clearPassword() {
 
 // 트레이너 로그인
 async function handleLogin() {
-  if (isLoading.value) return
+  if (isBusy.value) return
 
   isLoading.value = true
   loginError.value = ''
@@ -69,6 +73,49 @@ async function handleLogin() {
     loginError.value = '로그인 중 문제가 발생했습니다. 다시 시도해 주세요.'
   } finally {
     isLoading.value = false
+  }
+}
+
+// 데모 둘러보기
+async function handleDemo() {
+  if (isBusy.value) return
+
+  isDemoLoading.value = true
+  loginError.value = ''
+
+  try {
+    // 기존 로그인 세션 확인
+    const { data, error: sessionError } = await supabase.auth.getSession()
+
+    if (sessionError) {
+      throw sessionError
+    }
+
+    const session = data.session
+
+    // 일반 로그인 계정이 유지 중이면 데모 계정으로 전환하지 않음
+    if (session && !session.user.is_anonymous) {
+      loginError.value = '데모를 이용하려면 먼저 로그아웃해 주세요.'
+      return
+    }
+
+    // 기존 익명 세션이 없다면 새로운 익명 세션 생성
+    if (!session) {
+      const { error } = await supabase.auth.signInAnonymously()
+
+      if (error) {
+        throw error
+      }
+    }
+
+    // 데모 인증 완료 후 대시보드로 이동
+    await router.replace('/')
+  } catch (error) {
+    console.error('Supabase 데모 연결 오류:', error)
+
+    loginError.value = '데모에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+  } finally {
+    isDemoLoading.value = false
   }
 }
 </script>
@@ -170,7 +217,7 @@ async function handleLogin() {
         <!-- 로그인 버튼 -->
         <button
           type="submit"
-          :disabled="isLoading"
+          :disabled="isBusy"
           class="w-full rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {{ isLoading ? '로그인 중...' : '로그인' }}
@@ -186,6 +233,30 @@ async function handleLogin() {
           </RouterLink>
         </div>
       </form>
+
+      <!-- 데모 둘러보기 구분선 -->
+      <div class="my-6 flex items-center gap-3">
+        <div class="h-px flex-1 bg-slate-200"></div>
+        <span class="text-xs text-slate-400">또는</span>
+        <div class="h-px flex-1 bg-slate-200"></div>
+      </div>
+
+      <!-- 데모 둘러보기 버튼 -->
+      <button
+        type="button"
+        :disabled="isBusy"
+        class="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+        @click="handleDemo"
+      >
+        <Eye :size="18" aria-hidden="true" />
+        {{ isDemoLoading ? '데모 연결 중...' : '데모 둘러보기' }}
+      </button>
+
+      <!-- 데모 안내 -->
+      <p class="mt-3 text-center text-xs leading-relaxed text-slate-400 break-keep">
+        회원가입 없이 샘플 데이터로 Remind PT를 체험해 보세요.
+        <span class="block">데모에서는 데이터 조회만 가능합니다.</span>
+      </p>
     </div>
   </div>
 </template>

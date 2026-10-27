@@ -1,9 +1,20 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
-import { CalendarDays, ChevronLeft, ChevronRight, CircleAlert, LoaderCircle } from 'lucide-vue-next'
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  Download,
+  LoaderCircle,
+} from 'lucide-vue-next'
+
 import { supabase } from '@/lib/supabase'
+import { getMonthlySessionExport } from '@/api/sessionExports'
+import { downloadMonthlySessionExcel } from '@/utils/sessionExportExcel'
 import DashboardCompanyMonthlyStats from '@/components/dashboard/DashboardCompanyMonthlyStats.vue'
+
 // ============================================
 // 대시보드 월간 수업 통계 타입
 // ============================================
@@ -36,6 +47,7 @@ function getKoreaYearMonth() {
 
   const year = Number(parts.find((part) => part.type === 'year')?.value)
   const month = Number(parts.find((part) => part.type === 'month')?.value)
+
   return { year, month }
 }
 
@@ -43,20 +55,38 @@ const initialMonth = getKoreaYearMonth()
 const selectedYear = ref(initialMonth.year)
 const selectedMonth = ref(initialMonth.month)
 
+// 엑셀 다운로드 상태
+const isExporting = ref(false)
+const exportError = ref('')
+const exportMessage = ref('')
+
+// 다른 월로 이동하면 이전 다운로드 안내 초기화
+watch([selectedYear, selectedMonth], () => {
+  exportError.value = ''
+  exportMessage.value = ''
+})
+
 const monthTitle = computed(() => `${selectedYear.value}년 ${selectedMonth.value}월`)
+
 const isCurrentMonth = computed(
   () => selectedYear.value === initialMonth.year && selectedMonth.value === initialMonth.month,
 )
 
 function moveMonth(offset: number) {
+  if (isExporting.value) return
+
   // UTC 날짜 계산으로 연말/연초 이동을 안전하게 처리
   const next = new Date(Date.UTC(selectedYear.value, selectedMonth.value - 1 + offset, 1))
+
   selectedYear.value = next.getUTCFullYear()
   selectedMonth.value = next.getUTCMonth() + 1
 }
 
 function goToCurrentMonth() {
+  if (isExporting.value) return
+
   const current = getKoreaYearMonth()
+
   selectedYear.value = current.year
   selectedMonth.value = current.month
 }
@@ -72,28 +102,65 @@ const {
   isFetching,
   error: statsError,
 } = useQuery({
-  queryKey: computed(() => [
-    'sessions',
-    'dashboard-monthly-stats',
-    selectedYear.value,
-    selectedMonth.value,
-  ]),
-  queryFn: async (): Promise<MonthlySessionStats> => {
+  queryKey: computed(
+    () => ['sessions', 'dashboard-monthly-stats', selectedYear.value, selectedMonth.value] as const,
+  ),
+  queryFn: async ({ queryKey }): Promise<MonthlySessionStats> => {
+    // 빠르게 월을 전환해도 각 요청의 조회 월을 유지
+    const [, , year, month] = queryKey
+
     const { data, error } = await supabase.rpc('get_dashboard_monthly_stats', {
-      p_year: selectedYear.value,
-      p_month: selectedMonth.value,
+      p_year: year,
+      p_month: month,
     })
 
     if (error) throw error
 
     // 집계 RPC는 수업이 없는 월에도 0이 담긴 한 행을 반환함
     const row = (data?.[0] ?? null) as MonthlySessionStats | null
+
     if (!row) throw new Error('월간 수업 통계를 불러오지 못했습니다.')
 
     return row
   },
   staleTime: 1000 * 30,
 })
+
+// ============================================
+// 선택한 월의 엑셀 다운로드
+// ============================================
+
+async function downloadSelectedMonth() {
+  if (isExporting.value || isLoading.value || statsError.value || !stats.value) return
+
+  // 버튼을 누른 시점의 월로 다운로드 대상을 고정
+  const year = selectedYear.value
+  const month = selectedMonth.value
+
+  isExporting.value = true
+  exportError.value = ''
+  exportMessage.value = ''
+
+  try {
+    // 화면 캐시가 아닌 다운로드용 최신 전체 데이터 조회
+    const data = await getMonthlySessionExport({ year, month })
+
+    // 전체 / 근무처별 / 회원별 기록을 하나의 엑셀 파일로 생성
+    await downloadMonthlySessionExcel(data)
+
+    // 실제 저장 완료 여부는 브라우저에서 결정되므로 다운로드 시작으로 안내
+    exportMessage.value = `${year}년 ${month}월 엑셀 다운로드를 시작했습니다.`
+  } catch (error) {
+    console.error('월별 수업 내역 엑셀 다운로드 오류:', error)
+
+    exportError.value =
+      error instanceof Error
+        ? error.message
+        : '월별 수업 내역을 다운로드하지 못했습니다. 다시 시도해 주세요.'
+  } finally {
+    isExporting.value = false
+  }
+}
 
 // ============================================
 // 수업 종류별 비율 (PT + 그룹 = 100%)
@@ -152,9 +219,7 @@ const attendanceCards = computed(() => [
 </script>
 
 <template>
-  <!-- ============================================ -->
   <!-- 월간 수업 현황 -->
-  <!-- ============================================ -->
   <section class="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
     <!-- 월간 수업 제목 및 월 변경 -->
     <div class="flex flex-wrap items-center justify-between gap-3">
@@ -163,38 +228,79 @@ const attendanceCards = computed(() => [
           <CalendarDays :size="20" class="text-blue-600" aria-hidden="true" />
           <h2 class="text-lg font-semibold text-slate-900">월간 수업 현황</h2>
         </div>
+
         <p class="mt-1 text-sm text-slate-500">선택한 월의 PT·그룹 수업과 출석 현황입니다.</p>
       </div>
-      <div class="flex items-center gap-1">
+
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="flex items-center gap-1">
+          <button
+            v-if="!isCurrentMonth"
+            type="button"
+            :disabled="isExporting"
+            class="mr-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="goToCurrentMonth"
+          >
+            이번 달
+          </button>
+
+          <button
+            type="button"
+            aria-label="이전 달 수업 통계"
+            :disabled="isExporting"
+            class="rounded-lg p-2 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="moveMonth(-1)"
+          >
+            <ChevronLeft :size="18" />
+          </button>
+
+          <span
+            class="min-w-26 text-center text-sm font-semibold text-slate-900"
+            aria-live="polite"
+          >
+            {{ monthTitle }}
+          </span>
+
+          <button
+            type="button"
+            aria-label="다음 달 수업 통계"
+            :disabled="isExporting"
+            class="rounded-lg p-2 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="moveMonth(1)"
+          >
+            <ChevronRight :size="18" />
+          </button>
+        </div>
+
+        <!-- 선택한 월의 전체 내역 다운로드 -->
         <button
-          v-if="!isCurrentMonth"
           type="button"
-          class="mr-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          @click="goToCurrentMonth"
+          :disabled="isExporting || isLoading || !!statsError || !stats"
+          :aria-busy="isExporting"
+          :aria-label="`${monthTitle} 수업 내역 엑셀 다운로드`"
+          class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+          @click="downloadSelectedMonth"
         >
-          이번 달
-        </button>
-        <button
-          type="button"
-          aria-label="이전 달 수업 통계"
-          class="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
-          @click="moveMonth(-1)"
-        >
-          <ChevronLeft :size="18" />
-        </button>
-        <span class="min-w-26 text-center text-sm font-semibold text-slate-900" aria-live="polite">
-          {{ monthTitle }}
-        </span>
-        <button
-          type="button"
-          aria-label="다음 달 수업 통계"
-          class="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
-          @click="moveMonth(1)"
-        >
-          <ChevronRight :size="18" />
+          <LoaderCircle v-if="isExporting" :size="16" class="animate-spin" aria-hidden="true" />
+          <Download v-else :size="16" aria-hidden="true" />
+
+          {{ isExporting ? '엑셀 생성 중...' : '엑셀 다운로드' }}
         </button>
       </div>
     </div>
+
+    <!-- 다운로드 오류 및 결과 안내 -->
+    <p
+      v-if="exportError"
+      role="alert"
+      class="mt-4 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700"
+    >
+      {{ exportError }}
+    </p>
+
+    <p v-else-if="exportMessage" role="status" class="mt-3 text-xs text-emerald-700">
+      {{ exportMessage }}
+    </p>
 
     <!-- 조회 중 -->
     <div
@@ -224,6 +330,7 @@ const attendanceCards = computed(() => [
           class="rounded-xl bg-slate-50 p-4"
         >
           <p class="text-xs font-medium text-slate-500">{{ card.label }}</p>
+
           <p class="mt-2 text-2xl font-bold tabular-nums" :class="card.valueClass">
             {{ card.value }}<span class="ml-1 text-sm font-medium">회</span>
           </p>
@@ -247,9 +354,7 @@ const attendanceCards = computed(() => [
           </div>
         </div>
 
-        <!-- ============================================ -->
         <!-- PT + 그룹 통합 비율 막대 -->
-        <!-- ============================================ -->
         <div v-if="sessionTypeSummary.total > 0" class="mt-4">
           <div
             class="flex h-3 overflow-hidden rounded-full"
@@ -301,6 +406,7 @@ const attendanceCards = computed(() => [
           <h3 class="text-sm font-semibold text-slate-900">회원별 출석 현황</h3>
           <p class="text-xs text-slate-400">그룹 수업은 참여 회원마다 각각 1건으로 계산</p>
         </div>
+
         <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
           <div
             v-for="card in attendanceCards"
@@ -308,6 +414,7 @@ const attendanceCards = computed(() => [
             class="rounded-lg border border-slate-100 p-3"
           >
             <p class="text-xs text-slate-500">{{ card.label }}</p>
+
             <p class="mt-1 text-xl font-semibold tabular-nums text-slate-800">
               {{ card.value }}<span class="ml-1 text-xs font-normal text-slate-500">건</span>
             </p>

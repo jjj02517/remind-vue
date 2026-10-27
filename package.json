@@ -19,6 +19,7 @@
     "@supabase/supabase-js": "^2.109.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/vue-query": "^5.104.5",
+    "exceljs": "^4.4.0",
     "lucide-vue-next": "^1.0.0",
     "pinia": "^4.0.3",
     "tailwindcss": "^4.3.3",

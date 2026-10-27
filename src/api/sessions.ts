@@ -643,3 +643,93 @@ export async function saveSessionWorkoutRecord(
     throw error
   }
 }
+
+// ============================================
+// 이전 운동 기록 조회
+// ============================================
+
+// 화면에서 사용하는 이전 운동 기록
+export interface PreviousWorkoutRecord {
+  attendanceId: string
+  sessionId: string
+  startsAt: string
+  sessionType: SessionType
+  companyName: string
+  workoutNotes: string
+}
+
+// DB 조회 함수가 반환하는 데이터
+interface PreviousWorkoutRecordRow {
+  attendance_id: string
+  session_id: string
+  starts_at: string
+  session_type: SessionType
+  company_name: string
+  workout_notes: string
+}
+
+// 이전 운동 기록 조회 요청 데이터
+export interface GetPreviousWorkoutRecordsParams {
+  attendanceId: string
+  offset?: number
+  signal?: AbortSignal
+}
+
+// 이전 운동 기록 한 페이지와 다음 조회 위치
+export interface PreviousWorkoutRecordsPage {
+  records: PreviousWorkoutRecord[]
+  nextOffset: number | undefined
+}
+
+const PREVIOUS_WORKOUT_PAGE_SIZE = 3
+
+// 현재 수업보다 이전인 동일 회원의 운동 기록을 3건씩 조회
+export async function getPreviousWorkoutRecords(
+  params: GetPreviousWorkoutRecordsParams,
+): Promise<PreviousWorkoutRecordsPage> {
+  if (!params.attendanceId) {
+    throw new Error('수업 참여 기록을 선택해 주세요.')
+  }
+
+  const offset = params.offset ?? 0
+
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new Error('운동 기록 조회 위치를 확인해 주세요.')
+  }
+
+  // 1건을 더 조회하여 다음 기록이 실제로 있는지 확인
+  // 표시할 기록이 정확히 3건이어도 불필요한 더 보기 버튼이 나타나지 않음
+  let request = supabase.rpc('get_previous_workout_records', {
+    p_attendance_id: params.attendanceId,
+    p_page_size: PREVIOUS_WORKOUT_PAGE_SIZE + 1,
+    p_offset: offset,
+  })
+
+  // 다른 회원으로 전환할 때 이전 조회를 취소할 수 있도록 지원
+  if (params.signal) {
+    request = request.abortSignal(params.signal)
+  }
+
+  const { data, error } = await request
+
+  if (error) throw error
+
+  const rows = (data ?? []) as PreviousWorkoutRecordRow[]
+
+  // DB의 snake_case를 화면에서 사용하는 camelCase로 변환
+  const records = rows.slice(0, PREVIOUS_WORKOUT_PAGE_SIZE).map((row) => ({
+    attendanceId: row.attendance_id,
+    sessionId: row.session_id,
+    startsAt: row.starts_at,
+    sessionType: row.session_type,
+    companyName: row.company_name,
+    workoutNotes: row.workout_notes,
+  }))
+
+  return {
+    records,
+    // 추가 확인용 1건은 다음 페이지에서 다시 조회하여 빠짐없이 표시
+    nextOffset:
+      rows.length > PREVIOUS_WORKOUT_PAGE_SIZE ? offset + PREVIOUS_WORKOUT_PAGE_SIZE : undefined,
+  }
+}

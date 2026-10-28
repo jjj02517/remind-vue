@@ -361,7 +361,7 @@ function resetForm() {
 // 신규 회원 등록
 async function submitMember() {
   if (isSubmitDisabled.value) return
-  if (blockDemoWrite()) return
+  if (await blockDemoWrite()) return
 
   const name = newMember.value.name.trim()
   const phone = normalizePhone(newMember.value.phone)

@@ -6,6 +6,7 @@ import type { Company } from '@/api/companies'
 import type { CompanyRateVersion } from '@/api/companyRates'
 import { addCompanyRateVersion } from '@/api/companyRates'
 import { getTodayString } from '@/utils/date'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // 근무처와 전체 단가 변경 이력 중 해당 근무처 이력 전달받기
 const props = defineProps<{
@@ -118,6 +119,8 @@ const { mutateAsync: saveCompanyRate, isPending: isSaving } = useMutation({
 // 단가 변경 이력 저장
 async function submitRateForm() {
   if (isSaveDisabled.value) return
+
+  if (await blockDemoWrite()) return
 
   const ptRate = parseRateInput(ptRateInput.value)
   const groupRate = parseRateInput(groupRateInput.value)

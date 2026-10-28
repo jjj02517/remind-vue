@@ -26,6 +26,7 @@ import {
 } from '@/api/sessions'
 import SessionWorkoutRecordEditor from '@/components/sessions/SessionWorkoutRecordEditor.vue'
 import PreviousWorkoutRecords from '@/components/sessions/PreviousWorkoutRecords.vue'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // ============================================
 // Props / Emits
@@ -252,6 +253,8 @@ function closeEditForm() {
 async function handleUpdateSession() {
   if (isBusy.value || !canEditSession.value || !hasEditChanges.value) return
 
+  if (await blockDemoWrite()) return
+
   if (!editDate.value || !editStartTime.value) {
     errorMessage.value = '수업 날짜와 시작 시간을 선택해 주세요.'
     return
@@ -296,6 +299,8 @@ async function handleCancelSession() {
     return
   }
 
+  if (await blockDemoWrite()) return
+
   const session = detail.value
   const confirmed = window.confirm(
     `${session.date} ${session.startTime} 수업을 취소할까요?\n\n` +
@@ -338,6 +343,7 @@ async function handleDeleteSession() {
   if (isBusy.value || isEditing.value || !canDeleteSession.value || !detail.value) {
     return
   }
+  if (await blockDemoWrite()) return
 
   const session = detail.value
   const confirmed = window.confirm(

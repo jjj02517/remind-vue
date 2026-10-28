@@ -14,6 +14,7 @@ import { getTodayString } from '@/utils/date'
 import { formatPhone } from '@/utils/phone'
 import { getMemberStatus } from '@/utils/memberStatus'
 import type { MemberStatus } from '@/utils/memberStatus'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 import MemberPackageCard from '@/components/members/MemberPackageCard.vue'
 import AddPackageDialog from '@/components/members/dialogs/AddPackageDialog.vue'
@@ -365,6 +366,8 @@ async function submitCompanyLink() {
   companyLinkError.value = ''
 
   try {
+    if (await blockDemoWrite()) return
+
     await linkMemberToCompany(companyId)
     selectedCompanyId.value = ''
     isCompanyLinkFormOpen.value = false
@@ -495,6 +498,8 @@ async function downloadMemberHistory() {
   exportError.value = ''
 
   try {
+    if (await blockDemoWrite()) return
+
     const data = await getMemberExport({ memberId: selectedMemberId })
     await downloadMemberExcel(data)
   } catch (error) {

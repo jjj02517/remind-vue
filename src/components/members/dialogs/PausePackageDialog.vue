@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { supabase } from '@/lib/supabase'
 import { getPackagePauses } from '@/api/packagePauses'
 import { getTodayString } from '@/utils/date'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // 부모 컴포넌트에서 이용권 ID 전달받기
 const props = defineProps<{
@@ -305,6 +306,8 @@ async function submitPause() {
   pauseError.value = ''
 
   try {
+    if (await blockDemoWrite()) return
+
     // Supabase RPC로 일시정지 등록
     await registerPause()
 

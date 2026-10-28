@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Dumbbell, LayoutDashboard, Users, Building2, CalendarDays, LogOut } from 'lucide-vue-next'
+import DeleteAccountDialog from '@/components/settings/DeleteAccountDialog.vue'
 
 // 메뉴 선택 및 로그아웃 이벤트
 const emit = defineEmits<{
@@ -49,6 +50,12 @@ const menus = [
         <LogOut :size="20" aria-hidden="true" />
         <span class="font-medium">로그아웃</span>
       </button>
+
+      <!-- 회원 탈퇴 -->
+      <!-- 회원 탈퇴 -->
+      <div class="mt-1 pl-4">
+        <DeleteAccountDialog />
+      </div>
 
       <!-- 저작권 -->
       <p class="mt-4 px-4 text-xs text-slate-400">© 2026 Remind PT</p>

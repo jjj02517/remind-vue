@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { getCompanies } from '@/api/companies'
 import { supabase } from '@/lib/supabase'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // 부모 컴포넌트에서 회원 ID 전달받기
 const props = defineProps<{
@@ -176,6 +177,8 @@ async function submitPackage() {
   addPackageError.value = ''
 
   try {
+    if (await blockDemoWrite()) return
+
     // Supabase에 선택한 근무처의 PT 이용권 추가
     await addPtPackage({
       totalSessions: totalSessions.value,

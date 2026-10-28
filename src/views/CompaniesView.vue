@@ -13,6 +13,8 @@ import type { Company } from '@/api/companies'
 import { getCompanyRateHistory } from '@/api/companyRates'
 import CompanyRateSettings from '@/components/companies/CompanyRateSettings.vue'
 import { getTodayString } from '@/utils/date'
+import { blockDemoWrite } from '@/utils/demoGuard'
+
 // TanStack Query 캐시 관리
 const queryClient = useQueryClient()
 // 근무처 등록 폼 표시 여부
@@ -178,6 +180,8 @@ function closeCreateForm() {
 // 새 근무처 등록
 async function submitCompany() {
   if (isSubmitDisabled.value) return
+
+  if (await blockDemoWrite()) return
   createError.value = ''
   successMessage.value = ''
   const ptRate = parseInitialRate(initialPtRateInput.value)
@@ -225,6 +229,7 @@ async function submitEdit(company: Company) {
   if (isEditSubmitDisabled.value) return
   if (editingCompanyId.value !== company.id) return
   if (company.company_type !== 'workplace') return
+  if (await blockDemoWrite()) return
   actionError.value = null
   successMessage.value = ''
   pendingCompanyId.value = company.id
@@ -263,6 +268,8 @@ async function changeCompanyStatus(company: Company, action: 'archive' | 'restor
   successMessage.value = ''
   pendingCompanyId.value = company.id
   try {
+    if (await blockDemoWrite()) return
+
     await changeCompany({
       type: action,
       companyId: company.id,

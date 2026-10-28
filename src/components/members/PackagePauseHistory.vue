@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
-
+import { blockDemoWrite } from '@/utils/demoGuard'
 import { supabase } from '@/lib/supabase'
 import { getPackagePauses } from '@/api/packagePauses'
 import { getPackagePauseStatus, getPackagePauseStatusLabel } from '@/utils/packagePauseStatus'
@@ -159,6 +159,8 @@ async function handlePauseAction(pause: PackagePause, action: PauseAction) {
   pendingPauseId.value = pause.id
 
   try {
+    if (await blockDemoWrite()) return
+
     // Supabase RPC로 예약 취소 또는 조기 복귀
     await updatePause({
       pauseId: pause.id,

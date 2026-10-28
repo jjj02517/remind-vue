@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 
 import { getCompanies } from '@/api/companies'
 import { supabase } from '@/lib/supabase'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // 부모 컴포넌트에서 회원 ID 전달받기
 const props = defineProps<{
@@ -169,6 +170,7 @@ function handleCancel(event: Event) {
 async function submitGroupPackage() {
   if (isSubmitDisabled.value) return
 
+  if (await blockDemoWrite()) return
   registerError.value = ''
 
   try {

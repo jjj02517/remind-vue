@@ -11,7 +11,7 @@ import {
 import { useMemberDuplicateCheck } from '@/composables/useMemberDuplicateCheck'
 import { getCompanies } from '@/api/companies'
 import type { Member } from '@/types/member'
-
+import { blockDemoWrite } from '@/utils/demoGuard'
 // 신규 회원 등록 데이터 타입
 type NewMember = Pick<Member, 'name' | 'phone' | 'totalSessions'> & {
   startsOn: string
@@ -361,6 +361,8 @@ function resetForm() {
 // 신규 회원 등록
 async function submitMember() {
   if (isSubmitDisabled.value) return
+  if (await blockDemoWrite()) return
+
   const name = newMember.value.name.trim()
   const phone = normalizePhone(newMember.value.phone)
   const totalSessions = newMember.value.totalSessions

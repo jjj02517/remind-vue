@@ -1,14 +1,28 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
-import { X } from 'lucide-vue-next'
+import { Info, X } from 'lucide-vue-next'
 
+import { getTrainerContext } from '@/api/trainerContext'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 
 const route = useRoute()
 const router = useRouter()
+
+// 데모 사용자 여부
+const isDemo = ref(false)
+
+// 공통 레이아웃 진입 시 데모 모드 확인
+onMounted(async () => {
+  try {
+    const context = await getTrainerContext()
+    isDemo.value = context.isDemo
+  } catch (error) {
+    console.error('데모 모드 확인 오류:', error)
+  }
+})
 
 // 모바일 메뉴 열림 상태
 const isSidebarOpen = ref(false)
@@ -142,6 +156,20 @@ watch(
         @toggle-menu="isSidebarOpen ? closeSidebar() : openSidebar()"
         @logout="handleLogout"
       />
+
+      <!-- 데모 모드 안내 -->
+      <div
+        v-if="isDemo"
+        role="note"
+        class="mx-4 mt-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 sm:mx-6 lg:mx-8"
+      >
+        <Info :size="18" class="mt-0.5 shrink-0 text-blue-600" aria-hidden="true" />
+
+        <p class="leading-relaxed">
+          <span class="font-semibold">데모 체험 모드입니다.</span>
+          샘플 데이터를 조회할 수 있으며, 등록·수정·삭제 기능은 제한됩니다.
+        </p>
+      </div>
 
       <!-- 페이지 콘텐츠 -->
       <main class="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">

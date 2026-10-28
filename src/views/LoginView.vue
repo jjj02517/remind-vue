@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Dumbbell, X, Eye, EyeOff } from 'lucide-vue-next'
 
@@ -9,16 +9,29 @@ import { supabase } from '@/lib/supabase'
 const route = useRoute()
 const router = useRouter()
 
-// 로그인 입력 데이터
+// 로그인 및 회원가입 화면 전환
+const authMode = ref<'login' | 'signup'>('login')
+const isSignupMode = computed(() => authMode.value === 'signup')
+
+// 로그인 및 회원가입 입력 데이터
 const email = ref('')
 const password = ref('')
+const confirmPassword = ref('')
 
-// 로그인 상태
+// 로그인 및 회원가입 상태
 const isLoading = ref(false)
+const isSignupLoading = ref(false)
+const isDemoLoading = ref(false)
 const loginError = ref('')
+const signupError = ref('')
+const signupNotice = ref('')
+
+// 인증 작업 진행 중
+const isBusy = computed(() => isLoading.value || isSignupLoading.value || isDemoLoading.value)
 
 // 비밀번호 표시 여부
 const showPassword = ref(false)
+const showConfirmPassword = ref(false)
 
 // 비밀번호 입력값 삭제
 function clearPassword() {
@@ -26,12 +39,42 @@ function clearPassword() {
   showPassword.value = false
 }
 
+// 비밀번호 확인 입력값 삭제
+function clearConfirmPassword() {
+  confirmPassword.value = ''
+  showConfirmPassword.value = false
+}
+
+// 로그인 및 회원가입 화면 전환
+function changeAuthMode(mode: 'login' | 'signup') {
+  if (isBusy.value) return
+
+  authMode.value = mode
+  loginError.value = ''
+  signupError.value = ''
+  signupNotice.value = ''
+
+  clearPassword()
+  clearConfirmPassword()
+}
+
+// 로그인 또는 회원가입 폼 제출
+async function handleSubmit() {
+  if (isSignupMode.value) {
+    await handleSignup()
+    return
+  }
+
+  await handleLogin()
+}
+
 // 트레이너 로그인
 async function handleLogin() {
-  if (isLoading.value) return
+  if (isBusy.value) return
 
   isLoading.value = true
   loginError.value = ''
+  signupNotice.value = ''
 
   try {
     // Supabase 이메일 / 비밀번호 인증
@@ -71,6 +114,113 @@ async function handleLogin() {
     isLoading.value = false
   }
 }
+
+// 트레이너 회원가입
+async function handleSignup() {
+  if (isBusy.value) return
+
+  signupError.value = ''
+  signupNotice.value = ''
+
+  // 비밀번호 길이 확인
+  if (password.value.length < 8) {
+    signupError.value = '비밀번호는 8자 이상 입력해 주세요.'
+    return
+  }
+
+  // 비밀번호 확인
+  if (password.value !== confirmPassword.value) {
+    signupError.value = '비밀번호가 일치하지 않습니다.'
+    return
+  }
+
+  isSignupLoading.value = true
+
+  try {
+    // Supabase 이메일 / 비밀번호 회원가입
+    const { data, error } = await supabase.auth.signUp({
+      email: email.value.trim(),
+      password: password.value,
+    })
+
+    if (error) {
+      console.error('Supabase 회원가입 오류:', {
+        code: error.code,
+        message: error.message,
+        status: error.status,
+      })
+
+      signupError.value =
+        error.code === 'weak_password'
+          ? '비밀번호 보안 조건을 확인해 주세요.'
+          : '회원가입을 완료하지 못했습니다. 입력 정보를 확인하고 다시 시도해 주세요.'
+      return
+    }
+
+    // 가입 직후 세션이 생성되면 대시보드로 이동
+    if (data.session) {
+      await router.replace('/')
+      return
+    }
+
+    // 이메일 인증이 필요한 경우 로그인 화면에서 안내
+    authMode.value = 'login'
+    clearPassword()
+    clearConfirmPassword()
+
+    signupNotice.value =
+      '회원가입 요청이 접수되었습니다. 메일함으로 이동하여 인증 링크를 눌러 주세요. 스팸함도 확인해 주세요.'
+  } catch (error) {
+    console.error('회원가입 처리 오류:', error)
+    signupError.value = '회원가입 중 문제가 발생했습니다. 다시 시도해 주세요.'
+  } finally {
+    isSignupLoading.value = false
+  }
+}
+
+// 데모 둘러보기
+async function handleDemo() {
+  if (isBusy.value) return
+
+  isDemoLoading.value = true
+  loginError.value = ''
+  signupError.value = ''
+
+  try {
+    // 기존 로그인 세션 확인
+    const { data, error: sessionError } = await supabase.auth.getSession()
+
+    if (sessionError) {
+      throw sessionError
+    }
+
+    const session = data.session
+
+    // 일반 로그인 계정이 유지 중이면 데모 계정으로 전환하지 않음
+    if (session && !session.user.is_anonymous) {
+      loginError.value = '데모를 이용하려면 먼저 로그아웃해 주세요.'
+      return
+    }
+
+    // 기존 익명 세션이 없다면 새로운 익명 세션 생성
+    if (!session) {
+      const { error } = await supabase.auth.signInAnonymously()
+
+      if (error) {
+        throw error
+      }
+    }
+
+    // 데모 인증 완료 후 대시보드로 이동
+    await router.replace('/')
+  } catch (error) {
+    console.error('Supabase 데모 연결 오류:', error)
+
+    loginError.value = '데모에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+  } finally {
+    isDemoLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -84,14 +234,20 @@ async function handleLogin() {
 
       <!-- 페이지 제목 -->
       <div class="mt-8 text-center">
-        <h2 class="text-xl font-semibold text-slate-900">트레이너 로그인</h2>
+        <h2 class="text-xl font-semibold text-slate-900">
+          {{ isSignupMode ? '트레이너 회원가입' : '트레이너 로그인' }}
+        </h2>
         <p class="mt-2 text-sm text-slate-500 break-keep">
-          계정에 로그인하여 회원과 수업을 관리하세요.
+          {{
+            isSignupMode
+              ? '계정을 생성하고 회원과 수업을 체계적으로 관리하세요.'
+              : '계정에 로그인하여 회원과 수업을 관리하세요.'
+          }}
         </p>
       </div>
 
-      <!-- 로그인 폼 -->
-      <form class="mt-8 space-y-5" @submit.prevent="handleLogin">
+      <!-- 로그인 및 회원가입 폼 -->
+      <form class="mt-8 space-y-5" @submit.prevent="handleSubmit">
         <!-- 이메일 -->
         <div>
           <label for="email" class="mb-2 block text-sm font-medium text-slate-700"> 이메일 </label>
@@ -101,7 +257,7 @@ async function handleLogin() {
               id="email"
               v-model="email"
               type="email"
-              autocomplete="username"
+              :autocomplete="isSignupMode ? 'email' : 'username'"
               required
               placeholder="example@email.com"
               class="w-full rounded-lg border border-slate-200 px-4 py-3 pr-10 text-sm outline-none focus:border-blue-500"
@@ -131,9 +287,10 @@ async function handleLogin() {
               id="password"
               v-model="password"
               :type="showPassword ? 'text' : 'password'"
-              autocomplete="current-password"
+              :autocomplete="isSignupMode ? 'new-password' : 'current-password'"
+              :minlength="isSignupMode ? 8 : undefined"
               required
-              placeholder="비밀번호를 입력하세요"
+              :placeholder="isSignupMode ? '8자 이상의 비밀번호' : '비밀번호를 입력하세요'"
               class="w-full rounded-lg border border-slate-200 px-4 py-3 pr-20 text-sm outline-none focus:border-blue-500"
             />
 
@@ -160,24 +317,94 @@ async function handleLogin() {
               <Eye v-else :size="18" aria-hidden="true" />
             </button>
           </div>
+
+          <!-- 회원가입 비밀번호 안내 -->
+          <p v-if="isSignupMode" class="mt-2 text-xs text-slate-400">
+            비밀번호는 8자 이상 입력해 주세요.
+          </p>
+        </div>
+
+        <!-- 회원가입 비밀번호 확인 -->
+        <div v-if="isSignupMode">
+          <label for="confirm-password" class="mb-2 block text-sm font-medium text-slate-700">
+            비밀번호 확인
+          </label>
+
+          <div class="relative">
+            <input
+              id="confirm-password"
+              v-model="confirmPassword"
+              :type="showConfirmPassword ? 'text' : 'password'"
+              autocomplete="new-password"
+              minlength="8"
+              required
+              placeholder="비밀번호를 다시 입력하세요"
+              class="w-full rounded-lg border border-slate-200 px-4 py-3 pr-20 text-sm outline-none focus:border-blue-500"
+            />
+
+            <!-- 비밀번호 확인 입력값 삭제 버튼 -->
+            <button
+              v-if="confirmPassword"
+              type="button"
+              aria-label="비밀번호 확인 지우기"
+              class="absolute top-1/2 right-11 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              @click="clearConfirmPassword"
+            >
+              <X :size="18" aria-hidden="true" />
+            </button>
+
+            <!-- 비밀번호 확인 보기 / 숨기기 버튼 -->
+            <button
+              type="button"
+              :aria-label="showConfirmPassword ? '비밀번호 확인 숨기기' : '비밀번호 확인 보기'"
+              :aria-pressed="showConfirmPassword"
+              class="absolute top-1/2 right-3 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              @click="showConfirmPassword = !showConfirmPassword"
+            >
+              <EyeOff v-if="showConfirmPassword" :size="18" aria-hidden="true" />
+              <Eye v-else :size="18" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         <!-- 로그인 오류 메시지 -->
-        <p v-if="loginError" role="alert" class="text-sm text-red-600">
+        <p v-if="!isSignupMode && loginError" role="alert" class="text-sm text-red-600">
           {{ loginError }}
         </p>
 
-        <!-- 로그인 버튼 -->
+        <!-- 회원가입 오류 메시지 -->
+        <p v-if="isSignupMode && signupError" role="alert" class="text-sm text-red-600">
+          {{ signupError }}
+        </p>
+
+        <!-- 회원가입 완료 후 안내 -->
+        <p
+          v-if="!isSignupMode && signupNotice"
+          role="status"
+          class="rounded-lg border border-green-200 bg-green-50 p-3 text-sm leading-relaxed text-green-700"
+        >
+          {{ signupNotice }}
+        </p>
+
+        <!-- 로그인 또는 회원가입 버튼 -->
         <button
           type="submit"
-          :disabled="isLoading"
+          :disabled="isBusy"
           class="w-full rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {{ isLoading ? '로그인 중...' : '로그인' }}
+          {{
+            isSignupMode
+              ? isSignupLoading
+                ? '회원가입 중...'
+                : '회원가입'
+              : isLoading
+                ? '로그인 중...'
+                : '로그인'
+          }}
         </button>
 
         <!-- 비밀번호 재설정 -->
-        <div class="text-center">
+        <div v-if="!isSignupMode" class="text-center">
           <RouterLink
             to="/forgot-password"
             class="text-sm font-medium text-blue-600 hover:underline"
@@ -185,7 +412,46 @@ async function handleLogin() {
             비밀번호를 잊으셨나요?
           </RouterLink>
         </div>
+
+        <!-- 로그인 / 회원가입 화면 전환 -->
+        <div class="text-center">
+          <p class="text-sm text-slate-500">
+            {{ isSignupMode ? '이미 계정이 있으신가요?' : '아직 계정이 없으신가요?' }}
+            <button
+              type="button"
+              :disabled="isBusy"
+              class="ml-1 font-semibold text-blue-600 hover:underline disabled:opacity-50"
+              @click="changeAuthMode(isSignupMode ? 'login' : 'signup')"
+            >
+              {{ isSignupMode ? '로그인' : '회원가입' }}
+            </button>
+          </p>
+        </div>
       </form>
+
+      <!-- 데모 둘러보기 구분선 -->
+      <div class="my-6 flex items-center gap-3">
+        <div class="h-px flex-1 bg-slate-200"></div>
+        <span class="text-xs text-slate-400">또는</span>
+        <div class="h-px flex-1 bg-slate-200"></div>
+      </div>
+
+      <!-- 데모 둘러보기 버튼 -->
+      <button
+        type="button"
+        :disabled="isBusy"
+        class="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+        @click="handleDemo"
+      >
+        <Eye :size="18" aria-hidden="true" />
+        {{ isDemoLoading ? '데모 연결 중...' : '데모 둘러보기' }}
+      </button>
+
+      <!-- 데모 안내 -->
+      <p class="mt-3 text-center text-xs leading-relaxed text-slate-400 break-keep">
+        회원가입 없이 샘플 데이터로 Remind PT를 체험해 보세요.
+        <span class="block">데모에서는 데이터 조회만 가능합니다.</span>
+      </p>
     </div>
   </div>
 </template>

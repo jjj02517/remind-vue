@@ -6,6 +6,7 @@ import { CalendarPlus2, X } from 'lucide-vue-next'
 import { getCompanies } from '@/api/companies'
 import { createSession, getSessionConflicts, getSessionMemberOptions } from '@/api/sessions'
 import type { SessionMemberOption, SessionType } from '@/api/sessions'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // 달력에서 선택한 날짜를 신규 수업 등록 폼의 기본 날짜로 사용
 const props = defineProps<{ initialDate: string }>()
@@ -180,6 +181,8 @@ defineExpose({ open })
 async function submit() {
   if (isSaving.value) return
   formError.value = ''
+
+  if (await blockDemoWrite()) return
 
   const participants = selectedMemberIds.value.map((memberId) => ({
     memberId,

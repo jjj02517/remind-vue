@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ArrowLeft, Download, LoaderCircle } from 'lucide-vue-next'
+import { Archive, ArchiveRestore, ArrowLeft, Download, LoaderCircle } from 'lucide-vue-next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 
 import { supabase } from '@/lib/supabase'
 import { getCompanies } from '@/api/companies'
 import type { Company } from '@/api/companies'
+import { getTrainerContext } from '@/api/trainerContext'
 import { getMemberExport } from '@/api/memberExports'
 import { downloadMemberExcel } from '@/utils/memberExportExcel'
 import { getTodayString } from '@/utils/date'
 import { formatPhone } from '@/utils/phone'
 import { getMemberStatus } from '@/utils/memberStatus'
 import type { MemberStatus } from '@/utils/memberStatus'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 import MemberPackageCard from '@/components/members/MemberPackageCard.vue'
 import AddPackageDialog from '@/components/members/dialogs/AddPackageDialog.vue'
@@ -57,6 +59,9 @@ function openEditDialog() {
 // 로그인한 트레이너 ID
 const trainerId = ref<string | null>(null)
 
+// 데모 방문자 여부
+const isDemo = ref(false)
+
 // 로그인 정보 조회 상태
 const isAuthLoading = ref(true)
 const authError = ref('')
@@ -79,7 +84,6 @@ const {
       .maybeSingle()
 
     if (error) throw error
-
     return data
   },
 
@@ -132,7 +136,6 @@ const {
       .order('created_at', { ascending: false })
 
     if (error) throw error
-
     return data ?? []
   },
 
@@ -179,6 +182,74 @@ const {
 
 // 근무처 연결 작업 후 회원 소속 목록 캐시 갱신
 const queryClient = useQueryClient()
+
+// 회원 보관 및 보관 해제 상태
+const isUpdatingArchive = ref(false)
+const archiveError = ref('')
+
+// DB에 저장된 실제 보관 상태를 기준으로 버튼 표시
+const isArchived = computed(() => dbMember.value?.status === 'archived')
+
+// 회원을 보관하거나 다시 관리 목록으로 복원
+async function toggleMemberArchive() {
+  if (!member.value || !trainerId.value || isUpdatingArchive.value) return
+
+  isUpdatingArchive.value = true
+  archiveError.value = ''
+
+  try {
+    // 데모 모드는 변경 내용을 저장하지 않음
+    if (isDemo.value) {
+      window.alert('데모 모드에서는 데이터를 저장할 수 없습니다.')
+      return
+    }
+
+    const shouldArchive = !isArchived.value
+
+    const message = shouldArchive
+      ? `${member.value.name} 회원을 보관할까요? 회원 정보와 이용권·수업 기록은 삭제되지 않습니다.`
+      : `${member.value.name} 회원을 다시 관리 목록에 표시할까요?`
+
+    if (!window.confirm(message)) return
+
+    // 보관 해제 시 DB는 inactive로 두고, 화면에서는 이용권을 기준으로 활동 상태를 계산
+    const nextStatus: MemberStatus = shouldArchive ? 'archived' : 'inactive'
+
+    const { data, error } = await supabase
+      .from('members')
+      .update({ status: nextStatus })
+      .eq('id', memberId.value)
+      .eq('trainer_id', trainerId.value)
+      .eq('status', dbMember.value!.status)
+      .select('id')
+      .maybeSingle()
+
+    if (error) throw error
+
+    if (!data) {
+      throw new Error('회원 상태가 변경되지 않았습니다. 새로고침 후 다시 시도해 주세요.')
+    }
+
+    // 상세 화면·회원 목록·대시보드의 회원 수 갱신
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ['member', trainerId.value, memberId.value],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['members'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['dashboard-overview'],
+      }),
+    ])
+  } catch (error) {
+    console.error('회원 보관 상태 변경 오류:', error)
+    archiveError.value =
+      error instanceof Error ? error.message : '회원 보관 상태를 변경하지 못했습니다.'
+  } finally {
+    isUpdatingArchive.value = false
+  }
+}
 
 // 근무처 추가 연결 폼 상태
 const isCompanyLinkFormOpen = ref(false)
@@ -259,6 +330,7 @@ const { mutateAsync: linkMemberToCompany, isPending: isLinkingCompany } = useMut
 
     if (error) throw error
   },
+
   onSuccess: async () => {
     // 소속 근무처 목록을 갱신해 새 근무처를 바로 표시
     await queryClient.invalidateQueries({
@@ -294,6 +366,8 @@ async function submitCompanyLink() {
   companyLinkError.value = ''
 
   try {
+    if (await blockDemoWrite()) return
+
     await linkMemberToCompany(companyId)
     selectedCompanyId.value = ''
     isCompanyLinkFormOpen.value = false
@@ -360,14 +434,12 @@ function isCurrentPackage(
 // 일시정지 중인 이용권도 이 목록에 남김
 const currentPackages = computed(() => {
   const today = getTodayString()
-
   return filteredPackages.value.filter((pkg) => isCurrentPackage(pkg, today))
 })
 
 // 사용 완료·기간 만료·취소된 지난 이용권
 const pastPackages = computed(() => {
   const today = getTodayString()
-
   return filteredPackages.value.filter((pkg) => !isCurrentPackage(pkg, today))
 })
 
@@ -404,6 +476,7 @@ const exportError = ref('')
 // 다른 회원으로 이동하면 이전 회원의 다운로드 안내 초기화
 watch(memberId, () => {
   exportError.value = ''
+  archiveError.value = ''
 })
 
 // 화면 필터와 관계없이 회원의 전체 내역을 새로 조회해 다운로드
@@ -425,6 +498,8 @@ async function downloadMemberHistory() {
   exportError.value = ''
 
   try {
+    if (await blockDemoWrite()) return
+
     const data = await getMemberExport({ memberId: selectedMemberId })
     await downloadMemberExcel(data)
   } catch (error) {
@@ -472,11 +547,10 @@ onMounted(async () => {
   }
 
   try {
-    const { data, error } = await supabase.auth.getSession()
-
-    if (error) throw error
-
-    trainerId.value = data.session?.user.id ?? null
+    // 데모 방문자는 샘플 데이터 소유 트레이너 ID로 조회
+    const context = await getTrainerContext()
+    trainerId.value = context.trainerId
+    isDemo.value = context.isDemo
 
     if (!trainerId.value) {
       authError.value = '로그인 정보를 확인하지 못했습니다.'
@@ -565,8 +639,37 @@ onMounted(async () => {
             >
               정보 수정
             </button>
+
+            <!-- 회원 보관 및 보관 해제 -->
+            <button
+              type="button"
+              :disabled="isUpdatingArchive"
+              :aria-busy="isUpdatingArchive"
+              class="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
+              :class="
+                isArchived
+                  ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              "
+              @click="toggleMemberArchive"
+            >
+              <LoaderCircle
+                v-if="isUpdatingArchive"
+                :size="16"
+                class="animate-spin"
+                aria-hidden="true"
+              />
+              <ArchiveRestore v-else-if="isArchived" :size="16" aria-hidden="true" />
+              <Archive v-else :size="16" aria-hidden="true" />
+              {{ isUpdatingArchive ? '처리 중...' : isArchived ? '보관 해제' : '회원 보관' }}
+            </button>
           </div>
         </div>
+
+        <!-- 회원 보관·해제 오류 안내 -->
+        <p v-if="archiveError" role="alert" class="mt-3 text-sm text-red-600">
+          {{ archiveError }}
+        </p>
 
         <!-- 회원 엑셀 다운로드 범위 및 결과 안내 -->
         <p class="mt-3 text-xs text-slate-500">
@@ -757,6 +860,7 @@ onMounted(async () => {
               근무처 필터 목록을 불러오지 못했습니다.
             </p>
           </div>
+
           <p v-if="packageCompanyFilter !== 'all'" class="text-sm text-slate-500">
             선택한 근무처의 이용권: {{ filteredPackages.length }}개
           </p>

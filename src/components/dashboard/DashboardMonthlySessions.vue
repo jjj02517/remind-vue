@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import {
   CalendarDays,
@@ -11,6 +11,8 @@ import {
 } from 'lucide-vue-next'
 
 import { supabase } from '@/lib/supabase'
+import { getTrainerContext } from '@/api/trainerContext'
+import type { TrainerContext } from '@/api/trainerContext'
 import { getMonthlySessionExport } from '@/api/sessionExports'
 import { downloadMonthlySessionExcel } from '@/utils/sessionExportExcel'
 import DashboardCompanyMonthlyStats from '@/components/dashboard/DashboardCompanyMonthlyStats.vue'
@@ -32,6 +34,38 @@ interface MonthlySessionStats {
   attendance_cancelled_count: number
   attendance_scheduled_count: number
 }
+
+// 데모 통계 계산에 사용할 수업 데이터
+interface DemoSession {
+  id: string
+  session_type: string
+  status: string
+}
+
+// ============================================
+// 트레이너 데이터 조회 컨텍스트
+// ============================================
+
+// 일반 사용자: 본인 데이터
+// 데모 방문자: 데모 트레이너의 샘플 데이터
+const trainerContext = ref<TrainerContext | null>(null)
+const isContextLoading = ref(true)
+const contextError = ref('')
+
+// 현재 사용자에 맞는 데이터 조회 기준 확인
+onMounted(async () => {
+  try {
+    trainerContext.value = await getTrainerContext()
+  } catch (error) {
+    console.error('월간 수업 트레이너 컨텍스트 조회 오류:', error)
+    contextError.value = '트레이너 정보를 확인하지 못했습니다.'
+  } finally {
+    isContextLoading.value = false
+  }
+})
+
+const isContextReady = computed(() => !!trainerContext.value?.trainerId)
+const isDemo = computed(() => trainerContext.value?.isDemo ?? false)
 
 // ============================================
 // 한국 시간 기준 조회 월
@@ -92,23 +126,176 @@ function goToCurrentMonth() {
 }
 
 // ============================================
+// 데모 월간 수업 통계 조회
+// ============================================
+
+// 기존 RPC는 auth.uid() 기준으로 조회하므로
+// 데모 방문자는 RLS로 허용된 데모 트레이너 데이터를 직접 집계
+async function getDemoMonthlyStats(
+  trainerId: string,
+  year: number,
+  month: number,
+): Promise<MonthlySessionStats> {
+  // 한국 시간 기준 해당 월의 시작과 다음 달 시작
+  const startIso = new Date(Date.UTC(year, month - 1, 1, -9)).toISOString()
+  const endIso = new Date(Date.UTC(year, month, 1, -9)).toISOString()
+
+  const sessions: DemoSession[] = []
+  const pageSize = 1000
+
+  // 삭제되지 않은 해당 월 수업 전체 조회
+  // Supabase 기본 조회 행 제한에 걸리지 않도록 페이지 단위 조회
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from('sessions')
+      .select('id, session_type, status')
+      .eq('trainer_id', trainerId)
+      .is('deleted_at', null)
+      .gte('starts_at', startIso)
+      .lt('starts_at', endIso)
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1)
+
+    if (error) throw error
+
+    const rows = data ?? []
+    sessions.push(...rows)
+
+    if (rows.length < pageSize) break
+  }
+
+  // 수업 및 출석 통계 초기값
+  const result: MonthlySessionStats = {
+    total_sessions: sessions.length,
+    pt_sessions: 0,
+    group_sessions: 0,
+    completed_sessions: 0,
+    scheduled_sessions: 0,
+    cancelled_sessions: 0,
+    attended_count: 0,
+    no_show_count: 0,
+    same_day_cancelled_count: 0,
+    attendance_cancelled_count: 0,
+    attendance_scheduled_count: 0,
+  }
+
+  // 수업 종류 및 진행 상태별 집계
+  for (const session of sessions) {
+    if (session.session_type === 'pt') {
+      result.pt_sessions++
+    }
+
+    if (session.session_type === 'group') {
+      result.group_sessions++
+    }
+
+    if (session.status === 'completed') {
+      result.completed_sessions++
+    }
+
+    if (session.status === 'scheduled') {
+      result.scheduled_sessions++
+    }
+
+    if (session.status === 'cancelled') {
+      result.cancelled_sessions++
+    }
+  }
+
+  // 해당 월에 수업이 없다면 빈 통계 반환
+  if (sessions.length === 0) {
+    return result
+  }
+
+  // 그룹 수업은 참여 회원별로 출석 기록이 존재하므로
+  // 수업 건수와 회원별 출석 건수를 별도로 집계
+  const sessionIds = sessions.map((session) => session.id)
+  const batchSize = 100
+
+  for (let i = 0; i < sessionIds.length; i += batchSize) {
+    const ids = sessionIds.slice(i, i + batchSize)
+
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase
+        .from('session_attendances')
+        .select('attendance_status')
+        .eq('trainer_id', trainerId)
+        .in('session_id', ids)
+        .order('id', { ascending: true })
+        .range(offset, offset + pageSize - 1)
+
+      if (error) throw error
+
+      const rows = data ?? []
+
+      for (const attendance of rows) {
+        switch (attendance.attendance_status) {
+          case 'attended':
+            result.attended_count++
+            break
+          case 'no_show':
+            result.no_show_count++
+            break
+          case 'same_day_cancelled':
+            result.same_day_cancelled_count++
+            break
+          case 'cancelled':
+            result.attendance_cancelled_count++
+            break
+          case 'scheduled':
+            result.attendance_scheduled_count++
+            break
+        }
+      }
+
+      if (rows.length < pageSize) break
+    }
+  }
+
+  return result
+}
+
+// ============================================
 // Supabase 월간 수업 통계 조회
 // ============================================
 
 // 수업 관리에서 ['sessions'] 캐시를 무효화하면 이 통계도 함께 갱신
 const {
   data: stats,
-  isPending: isLoading,
+  isPending: isStatsLoading,
   isFetching,
   error: statsError,
 } = useQuery({
+  // 트레이너 및 월별 캐시 구분
   queryKey: computed(
-    () => ['sessions', 'dashboard-monthly-stats', selectedYear.value, selectedMonth.value] as const,
+    () =>
+      [
+        'sessions',
+        'dashboard-monthly-stats',
+        trainerContext.value?.trainerId ?? '',
+        isDemo.value,
+        selectedYear.value,
+        selectedMonth.value,
+      ] as const,
   ),
+
+  // 데이터 소유자 확인 후 조회
+  enabled: isContextReady,
+
   queryFn: async ({ queryKey }): Promise<MonthlySessionStats> => {
     // 빠르게 월을 전환해도 각 요청의 조회 월을 유지
-    const [, , year, month] = queryKey
+    const [, , trainerId, demoMode, year, month] = queryKey
 
+    if (!trainerId) {
+      throw new Error('트레이너 정보가 없습니다.')
+    }
+
+    // 데모 방문자: 샘플 수업과 출석 데이터를 조회하여 집계
+    if (demoMode) {
+      return getDemoMonthlyStats(trainerId, year, month)
+    }
+
+    // 일반 사용자: 기존 월간 수업 통계 RPC 유지
     const { data, error } = await supabase.rpc('get_dashboard_monthly_stats', {
       p_year: year,
       p_month: month,
@@ -123,15 +310,28 @@ const {
 
     return row
   },
+
   staleTime: 1000 * 30,
 })
+
+// ============================================
+// 대시보드 조회 상태
+// ============================================
+
+const isLoading = computed(
+  () => isContextLoading.value || (isContextReady.value && isStatsLoading.value),
+)
+
+const hasError = computed(() => !!contextError.value || !!statsError.value)
 
 // ============================================
 // 선택한 월의 엑셀 다운로드
 // ============================================
 
 async function downloadSelectedMonth() {
-  if (isExporting.value || isLoading.value || statsError.value || !stats.value) return
+  if (isExporting.value || isLoading.value || hasError.value || !stats.value || isDemo.value) {
+    return
+  }
 
   // 버튼을 누른 시점의 월로 다운로드 대상을 고정
   const year = selectedYear.value
@@ -173,7 +373,6 @@ const sessionTypeSummary = computed(() => {
   const total = ptCount + groupCount
 
   const ptPercent = total > 0 ? Math.round((ptCount / total) * 100) : 0
-
   const groupPercent = total > 0 ? 100 - ptPercent : 0
 
   return {
@@ -275,9 +474,10 @@ const attendanceCards = computed(() => [
         <!-- 선택한 월의 전체 내역 다운로드 -->
         <button
           type="button"
-          :disabled="isExporting || isLoading || !!statsError || !stats"
+          :disabled="isExporting || isLoading || hasError || !stats || isDemo"
           :aria-busy="isExporting"
           :aria-label="`${monthTitle} 수업 내역 엑셀 다운로드`"
+          :title="isDemo ? '데모 엑셀 다운로드는 추후 연결 예정입니다.' : undefined"
           class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
           @click="downloadSelectedMonth"
         >
@@ -302,6 +502,11 @@ const attendanceCards = computed(() => [
       {{ exportMessage }}
     </p>
 
+    <!-- 데모 엑셀 다운로드 안내 -->
+    <p v-if="isDemo" class="mt-3 text-xs text-slate-400">
+      데모 모드의 엑셀 다운로드는 추후 연결 예정입니다.
+    </p>
+
     <!-- 조회 중 -->
     <div
       v-if="isLoading"
@@ -313,7 +518,7 @@ const attendanceCards = computed(() => [
 
     <!-- 조회 오류 -->
     <div
-      v-else-if="statsError"
+      v-else-if="hasError"
       role="alert"
       class="mt-5 flex items-center gap-2 rounded-lg bg-rose-50 p-4 text-sm text-rose-700"
     >

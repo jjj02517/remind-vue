@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { supabase } from '@/lib/supabase'
 import { addMembershipPackage } from '@/api/memberPackages'
 import { getCompanies } from '@/api/companies'
+import { blockDemoWrite } from '@/utils/demoGuard'
+
 // 부모 컴포넌트에서 회원 ID 전달받기
 const props = defineProps<{
   memberId: string
@@ -268,8 +270,11 @@ function handleCancel(event: Event) {
 // 월 회원권 등록
 async function submitMembershipPackage() {
   if (isSubmitDisabled.value) return
+
   registerError.value = ''
   try {
+    if (await blockDemoWrite()) return
+
     // Supabase RPC로 월 회원권 추가
     // DB에서 최소 30일 및 날짜 중복을 최종 검증
     await registerMembershipPackage({

@@ -1,9 +1,36 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { UsersRound, UserRoundCheck, Building2, Ticket, LoaderCircle } from 'lucide-vue-next'
 
 import { supabase } from '@/lib/supabase'
+import { getTrainerContext } from '@/api/trainerContext'
+import type { TrainerContext } from '@/api/trainerContext'
+
+// ============================================
+// 트레이너 데이터 조회 컨텍스트
+// ============================================
+
+// 일반 사용자: 본인 데이터
+// 데모 방문자: 데모 계정에 등록된 샘플 데이터
+const trainerContext = ref<TrainerContext | null>(null)
+const isContextLoading = ref(true)
+const contextError = ref('')
+
+// 현재 사용자가 조회할 데이터 소유자 확인
+onMounted(async () => {
+  try {
+    trainerContext.value = await getTrainerContext()
+  } catch (error) {
+    console.error('대시보드 트레이너 컨텍스트 조회 오류:', error)
+    contextError.value = '트레이너 정보를 확인하지 못했습니다.'
+  } finally {
+    isContextLoading.value = false
+  }
+})
+
+// 트레이너 컨텍스트를 가져온 뒤 통계 조회 활성화
+const isContextReady = computed(() => !!trainerContext.value?.trainerId)
 
 // ============================================
 // 한국 날짜 조회
@@ -33,17 +60,31 @@ const {
   isPending: isMembersLoading,
   error: membersError,
 } = useQuery({
-  queryKey: ['members', 'dashboard-overview'],
+  // 트레이너별로 캐시 분리
+  queryKey: computed(() => ['members', 'dashboard-overview', trainerContext.value?.trainerId]),
+
+  // 트레이너 컨텍스트가 준비되었을 때만 조회
+  enabled: isContextReady,
 
   queryFn: async () => {
+    const trainerId = trainerContext.value?.trainerId
+
+    if (!trainerId) {
+      throw new Error('트레이너 정보가 없습니다.')
+    }
+
     const [totalResponse, managedResponse] = await Promise.all([
       // 보관 회원을 포함한 전체 회원 수
-      supabase.from('members').select('id', { count: 'exact', head: true }),
+      supabase
+        .from('members')
+        .select('id', { count: 'exact', head: true })
+        .eq('trainer_id', trainerId),
 
       // 보관 상태가 아닌 회원 수
       supabase
         .from('members')
         .select('id', { count: 'exact', head: true })
+        .eq('trainer_id', trainerId)
         .neq('status', 'archived'),
     ])
 
@@ -75,12 +116,24 @@ const {
   isPending: isCompaniesLoading,
   error: companiesError,
 } = useQuery({
-  queryKey: ['companies', 'dashboard-overview'],
+  // 트레이너별로 캐시 분리
+  queryKey: computed(() => ['companies', 'dashboard-overview', trainerContext.value?.trainerId]),
+
+  enabled: isContextReady,
 
   queryFn: async () => {
+    const trainerId = trainerContext.value?.trainerId
+
+    if (!trainerId) {
+      throw new Error('트레이너 정보가 없습니다.')
+    }
+
     const { count, error } = await supabase
       .from('companies')
       .select('id', { count: 'exact', head: true })
+
+      // 현재 조회 대상 트레이너
+      .eq('trainer_id', trainerId)
 
       // 사용 중인 근무처만 조회
       .eq('is_active', true)
@@ -109,9 +162,23 @@ const {
   isPending: isPackagesLoading,
   error: packagesError,
 } = useQuery({
-  queryKey: ['member-packages', 'dashboard-overview', getTodayString()],
+  // 트레이너 및 조회 날짜별로 캐시 분리
+  queryKey: computed(() => [
+    'member-packages',
+    'dashboard-overview',
+    trainerContext.value?.trainerId,
+    getTodayString(),
+  ]),
+
+  enabled: isContextReady,
 
   queryFn: async () => {
+    const trainerId = trainerContext.value?.trainerId
+
+    if (!trainerId) {
+      throw new Error('트레이너 정보가 없습니다.')
+    }
+
     // 한국 날짜 기준으로 이용권 유효성 확인
     const today = getTodayString()
 
@@ -119,7 +186,14 @@ const {
       // 횟수제: 잔여 횟수가 있고 만료되지 않은 이용권
       supabase
         .from('member_packages')
-        .select('id, members!inner(id)', { count: 'exact', head: true })
+        .select('id, members!inner(id)', {
+          count: 'exact',
+          head: true,
+        })
+
+        // 현재 조회 대상 트레이너
+        .eq('trainer_id', trainerId)
+
         .eq('status', 'active')
         .eq('usage_type', 'count')
         .gt('remaining_sessions', 0)
@@ -133,7 +207,14 @@ const {
       // 기간제: 오늘이 실제 이용 기간에 포함되는 이용권
       supabase
         .from('member_packages')
-        .select('id, members!inner(id)', { count: 'exact', head: true })
+        .select('id, members!inner(id)', {
+          count: 'exact',
+          head: true,
+        })
+
+        // 현재 조회 대상 트레이너
+        .eq('trainer_id', trainerId)
+
         .eq('status', 'active')
         .eq('usage_type', 'period')
 
@@ -168,12 +249,16 @@ const {
 // 대시보드 조회 상태
 // ============================================
 
-const isLoading = computed(
-  () => isMembersLoading.value || isCompaniesLoading.value || isPackagesLoading.value,
-)
+const isLoading = computed(() => {
+  if (isContextLoading.value) return true
+  if (contextError.value) return false
+
+  return isMembersLoading.value || isCompaniesLoading.value || isPackagesLoading.value
+})
 
 const hasError = computed(
-  () => !!membersError.value || !!companiesError.value || !!packagesError.value,
+  () =>
+    !!contextError.value || !!membersError.value || !!companiesError.value || !!packagesError.value,
 )
 
 // ============================================
@@ -184,7 +269,7 @@ const overviewCards = computed(() => [
   {
     key: 'total-members',
     label: '전체 회원',
-    value: membersError.value ? null : (memberCounts.value?.total ?? null),
+    value: contextError.value || membersError.value ? null : (memberCounts.value?.total ?? null),
     unit: '명',
     description: '보관 회원 포함',
     icon: UsersRound,
@@ -193,7 +278,7 @@ const overviewCards = computed(() => [
   {
     key: 'managed-members',
     label: '관리 중 회원',
-    value: membersError.value ? null : (memberCounts.value?.managed ?? null),
+    value: contextError.value || membersError.value ? null : (memberCounts.value?.managed ?? null),
     unit: '명',
     description: '보관 회원 제외',
     icon: UserRoundCheck,
@@ -202,7 +287,7 @@ const overviewCards = computed(() => [
   {
     key: 'active-companies',
     label: '활성 근무처',
-    value: companiesError.value ? null : (activeCompanyCount.value ?? null),
+    value: contextError.value || companiesError.value ? null : (activeCompanyCount.value ?? null),
     unit: '곳',
     description: '개인 고객용 기본 근무처 제외',
     icon: Building2,
@@ -211,7 +296,7 @@ const overviewCards = computed(() => [
   {
     key: 'active-packages',
     label: '활성 이용권',
-    value: packagesError.value ? null : (activePackageCount.value ?? null),
+    value: contextError.value || packagesError.value ? null : (activePackageCount.value ?? null),
     unit: '개',
     description: '실제 이용 가능 기준',
     icon: Ticket,
@@ -221,9 +306,7 @@ const overviewCards = computed(() => [
 </script>
 
 <template>
-  <!-- ============================================ -->
   <!-- 대시보드 전체 운영 현황 -->
-  <!-- ============================================ -->
   <section class="space-y-4">
     <!-- 제목 -->
     <div class="flex flex-wrap items-center justify-between gap-3">
@@ -239,14 +322,13 @@ const overviewCards = computed(() => [
         불러오는 중...
       </div>
 
+      <!-- 조회 완료 상태 -->
       <span v-else class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500">
-        현재 기준
+        {{ trainerContext?.isDemo ? '데모 데이터' : '현재 기준' }}
       </span>
     </div>
 
-    <!-- ============================================ -->
     <!-- 통계 카드 목록 -->
-    <!-- ============================================ -->
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <div
         v-for="card in overviewCards"
@@ -285,9 +367,7 @@ const overviewCards = computed(() => [
       </div>
     </div>
 
-    <!-- ============================================ -->
     <!-- 조회 오류 안내 -->
-    <!-- ============================================ -->
     <p v-if="hasError" role="alert" class="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
       일부 운영 현황을 불러오지 못했습니다. 페이지를 새로고침한 뒤 다시 확인해 주세요.
     </p>

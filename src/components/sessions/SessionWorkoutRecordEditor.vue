@@ -8,6 +8,7 @@ import {
   type AttendanceStatus,
   type SessionAttendanceDetail,
 } from '@/api/sessions'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // ============================================
 // Props / Emits
@@ -110,6 +111,8 @@ async function saveRecord(nextStatus: AttendanceStatus | null = null) {
     return
   }
 
+  if (await blockDemoWrite()) return
+
   // 출석 변경 시 이용권 차감 또는 복구 여부 안내
   if (nextStatus !== null && nextStatus !== props.attendance.status) {
     const previousDeducted = isDeducted(props.attendance.status)
@@ -144,6 +147,8 @@ async function saveRecord(nextStatus: AttendanceStatus | null = null) {
     // ============================================
     // 1. DB에 운동 기록과 출석 상태 저장
     // ============================================
+
+    if (await blockDemoWrite()) return
 
     await saveSessionWorkoutRecord({
       attendanceId: props.attendance.id,

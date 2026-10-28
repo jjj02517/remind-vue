@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { supabase } from '@/lib/supabase'
 import { formatPhone, isValidPhone, normalizePhone } from '@/utils/phone'
 import { useMemberDuplicateCheck } from '@/composables/useMemberDuplicateCheck'
+import { blockDemoWrite } from '@/utils/demoGuard'
 
 // 부모 컴포넌트에서 회원 정보 전달받기
 const props = defineProps<{
@@ -226,6 +227,8 @@ function handlePhoneInput(event: Event) {
 // 회원 정보 수정
 async function submitEdit() {
   if (isSubmitDisabled.value) return
+
+  if (await blockDemoWrite()) return
 
   const name = editMember.value.name.trim()
   const phone = normalizePhone(editMember.value.phone)

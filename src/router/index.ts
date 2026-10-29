@@ -46,6 +46,7 @@ const router = createRouter({
           component: () => import('@/views/MembersView.vue'),
           meta: { title: '회원 관리' },
         },
+
         // 회원 상세 페이지
         {
           path: 'members/:id',
@@ -53,6 +54,7 @@ const router = createRouter({
           component: () => import('@/views/MemberDetailView.vue'),
           meta: { title: '회원 상세' },
         },
+
         // 근무처 관리 페이지
         {
           path: 'companies',
@@ -65,6 +67,14 @@ const router = createRouter({
           name: 'sessions',
           component: () => import('@/views/SessionsView.vue'),
           meta: { title: '수업 관리' },
+        },
+
+        // 정산 관리 페이지
+        {
+          path: 'settlements',
+          name: 'settlements',
+          component: () => import('@/views/SettlementsView.vue'),
+          meta: { title: '정산 관리' },
         },
       ],
     },

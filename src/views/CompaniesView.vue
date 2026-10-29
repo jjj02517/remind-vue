@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
-import { Archive, ArchiveRestore, Building2, Pencil, UserRound } from 'lucide-vue-next'
+import { Archive, ArchiveRestore, Building2, Pencil, Settings2, UserRound } from 'lucide-vue-next'
 import {
   archiveCompany,
   createCompanyWithRates,
@@ -12,11 +12,30 @@ import {
 import type { Company } from '@/api/companies'
 import { getCompanyRateHistory } from '@/api/companyRates'
 import CompanyRateSettings from '@/components/companies/CompanyRateSettings.vue'
+import CompanySettlementPolicyDialog from '@/components/companies/CompanySettlementPolicyDialog.vue'
 import { getTodayString } from '@/utils/date'
 import { blockDemoWrite } from '@/utils/demoGuard'
 
 // TanStack Query 캐시 관리
 const queryClient = useQueryClient()
+// 근무처별 정산 기준 설정 팝업
+const settlementPolicyDialog = ref<InstanceType<typeof CompanySettlementPolicyDialog> | null>(null)
+const selectedSettlementCompany = ref<Company | null>(null)
+
+// 선택한 근무처의 정산 기준 설정 팝업 열기
+async function openSettlementPolicyDialog(company: Company) {
+  selectedSettlementCompany.value = company
+
+  // 선택한 근무처 정보가 팝업에 반영된 다음 열기
+  await nextTick()
+  settlementPolicyDialog.value?.open()
+}
+
+// 정산 기준 저장 완료 안내
+function handleSettlementPolicyUpdated() {
+  successMessage.value = `${selectedSettlementCompany.value?.name ?? '근무처'} 정산 기준을 저장했습니다.`
+}
+
 // 근무처 등록 폼 표시 여부
 const isFormOpen = ref(false)
 // 새 근무처 이름
@@ -485,6 +504,18 @@ function isPendingCompany(companyId: string) {
           :is-loading="isRatesLoading"
           :has-error="!!ratesError"
         />
+
+        <!-- 기본 개인 고객 정산 기준 설정 -->
+        <div class="mt-4 border-t border-blue-100 pt-4">
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-blue-600"
+            @click="openSettlementPolicyDialog(personalCompany)"
+          >
+            <Settings2 :size="16" aria-hidden="true" />
+            정산 기준 설정
+          </button>
+        </div>
       </div>
       <!-- 일반 근무처 목록 제목 -->
       <div class="flex items-center justify-between">
@@ -589,6 +620,19 @@ function isPendingCompany(companyId: string) {
             :is-loading="isRatesLoading"
             :has-error="!!ratesError"
           />
+
+          <!-- 근무처별 정산 기준 설정 -->
+          <div class="mt-4 border-t border-slate-100 pt-4">
+            <button
+              type="button"
+              class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-2 focus-visible:outline-blue-600"
+              @click="openSettlementPolicyDialog(company)"
+            >
+              <Settings2 :size="16" aria-hidden="true" />
+              정산 기준 설정
+            </button>
+          </div>
+
           <!-- 근무처 수정 및 보관 오류 -->
           <p
             v-if="actionError?.companyId === company.id"
@@ -663,5 +707,14 @@ function isPendingCompany(companyId: string) {
         </div>
       </div>
     </div>
+
+    <!-- 선택한 근무처의 정산 기준 설정 팝업 -->
+    <CompanySettlementPolicyDialog
+      v-if="selectedSettlementCompany"
+      ref="settlementPolicyDialog"
+      :company-id="selectedSettlementCompany.id"
+      :company-name="selectedSettlementCompany.name"
+      @updated="handleSettlementPolicyUpdated"
+    />
   </div>
 </template>

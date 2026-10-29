@@ -10,11 +10,11 @@ import DashboardPackageAlerts from '@/components/dashboard/DashboardPackageAlert
     <!-- 회원·근무처·이용권 운영 현황-->
     <DashboardOverviewCards />
 
-    <!-- 월별 수업 통계 -->
-    <DashboardMonthlySessions />
-
     <!-- 오늘 수업 통계 -->
     <DashboardTodaySessions />
+
+    <!-- 월별 수업 통계 -->
+    <DashboardMonthlySessions />
 
     <!-- 이용권 알림 -->
     <DashboardPackageAlerts />

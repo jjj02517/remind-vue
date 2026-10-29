@@ -448,7 +448,9 @@ export async function downloadSettlementExcel({
 
   // 엑셀 파일 생성
   const buffer = await workbook.xlsx.writeBuffer()
-  const bytes = Uint8Array.from(buffer)
+
+  // ExcelJS의 Buffer 타입을 브라우저용 Uint8Array로 변환
+  const bytes = new Uint8Array(buffer as unknown as ArrayBuffer)
 
   const blob = new Blob([bytes.buffer as ArrayBuffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

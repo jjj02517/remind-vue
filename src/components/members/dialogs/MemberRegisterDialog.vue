@@ -14,6 +14,7 @@ import type { Member } from '@/types/member'
 import { blockDemoWrite } from '@/utils/demoGuard'
 // 신규 회원 등록 데이터 타입
 type NewMember = Pick<Member, 'name' | 'phone' | 'totalSessions'> & {
+  memo: string
   startsOn: string
   endsOn: string
 }
@@ -22,12 +23,14 @@ type NewMember = Pick<Member, 'name' | 'phone' | 'totalSessions'> & {
 type RegistrationType = 'pt' | 'group' | 'membership' | 'none'
 
 // 회원 등록 요청 데이터 타입
+
 type RegisterMemberParams =
   | {
       registrationType: 'pt' | 'group'
       companyId: string
       name: string
       phone: string
+      memo: string
       totalSessions: number
     }
   | {
@@ -35,6 +38,7 @@ type RegisterMemberParams =
       companyId: string
       name: string
       phone: string
+      memo: string
       startsOn: string
       endsOn: string
     }
@@ -43,6 +47,7 @@ type RegisterMemberParams =
       companyId: string
       name: string
       phone: string
+      memo: string
     }
 
 // TanStack Query 캐시 관리
@@ -101,6 +106,7 @@ const isCompanySelectionValid = computed(() =>
 const newMember = ref<NewMember>({
   name: '',
   phone: '',
+  memo: '',
   totalSessions: 1,
   startsOn: '',
   endsOn: '',
@@ -137,35 +143,43 @@ const { mutateAsync: registerMember, isPending: isRegistering } = useMutation({
         companyId: member.companyId,
         name: member.name,
         phone: member.phone,
+        memo: member.memo,
         totalSessions: member.totalSessions,
       })
     }
+
     // 그룹 횟수제 이용권과 함께 회원 등록
     if (member.registrationType === 'group') {
       return registerMemberWithGroup({
         companyId: member.companyId,
         name: member.name,
         phone: member.phone,
+        memo: member.memo,
         totalSessions: member.totalSessions,
       })
     }
+
     // 월 회원권과 함께 회원 등록
     if (member.registrationType === 'membership') {
       return registerMemberWithMembership({
         companyId: member.companyId,
         name: member.name,
         phone: member.phone,
+        memo: member.memo,
         startsOn: member.startsOn,
         endsOn: member.endsOn,
       })
     }
+
     // 이용권 없이 회원 기본 정보만 등록
     return registerMemberOnly({
       companyId: member.companyId,
       name: member.name,
       phone: member.phone,
+      memo: member.memo,
     })
   },
+
   // 등록 성공 시 회원 목록 캐시 무효화
   onSuccess: async () => {
     await queryClient.invalidateQueries({
@@ -346,14 +360,17 @@ function resetForm() {
   newMember.value = {
     name: '',
     phone: '',
+    memo: '',
     totalSessions: 1,
     startsOn: '',
     endsOn: '',
   }
+
   // 등록 방식 및 근무처 선택 초기화
   registrationType.value = 'pt'
   selectedCompanyId.value = ''
   registerError.value = ''
+
   // 이름 및 연락처 중복 검사 상태 초기화
   resetDuplicateCheck()
 }
@@ -365,6 +382,7 @@ async function submitMember() {
 
   const name = newMember.value.name.trim()
   const phone = normalizePhone(newMember.value.phone)
+  const memo = newMember.value.memo.trim()
   const totalSessions = newMember.value.totalSessions
   const startsOn = newMember.value.startsOn
   const endsOn = newMember.value.endsOn
@@ -411,6 +429,7 @@ async function submitMember() {
     if (isNameDuplicate && !isNameDuplicateConfirmed.value) {
       return
     }
+
     // PT 이용권과 함께 회원 등록
     if (selectedRegistrationType === 'pt') {
       await registerMember({
@@ -418,6 +437,7 @@ async function submitMember() {
         companyId,
         name,
         phone,
+        memo,
         totalSessions,
       })
     }
@@ -428,6 +448,7 @@ async function submitMember() {
         companyId,
         name,
         phone,
+        memo,
         totalSessions,
       })
     }
@@ -438,6 +459,7 @@ async function submitMember() {
         companyId,
         name,
         phone,
+        memo,
         startsOn,
         endsOn,
       })
@@ -449,8 +471,10 @@ async function submitMember() {
         companyId,
         name,
         phone,
+        memo,
       })
     }
+
     isSuccess = true
   } catch (error) {
     console.error('회원 등록 오류:', error)
@@ -551,6 +575,28 @@ defineExpose({
           {{ phoneError }}
         </p>
       </div>
+
+      <!-- 회원 메모 -->
+      <div>
+        <label for="member-memo" class="mb-2 block text-sm font-medium text-slate-700">
+          회원 메모
+          <span class="font-normal text-slate-400">(선택)</span>
+        </label>
+
+        <textarea
+          id="member-memo"
+          v-model="newMember.memo"
+          rows="4"
+          :disabled="isBusy"
+          placeholder="회원에 대해 참고할 사항을 입력해 주세요."
+          class="w-full resize-y rounded-lg border border-slate-200 px-4 py-3 text-sm leading-relaxed outline-none focus:border-blue-500 disabled:opacity-50"
+        ></textarea>
+
+        <p class="mt-2 text-xs text-slate-400">
+          등록한 메모는 회원 상세 및 수업 관리 화면에서 확인할 수 있습니다.
+        </p>
+      </div>
+
       <!-- 회원 등록 근무처 선택 -->
       <div>
         <label for="member-company" class="mb-2 block text-sm font-medium text-slate-700">

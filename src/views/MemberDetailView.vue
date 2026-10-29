@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Archive, ArchiveRestore, ArrowLeft, Download, LoaderCircle } from 'lucide-vue-next'
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Download,
+  LoaderCircle,
+  StickyNote,
+} from 'lucide-vue-next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 
 import { supabase } from '@/lib/supabase'
@@ -26,6 +33,7 @@ interface MemberDetailData {
   id: string
   name: string
   phone: string
+  memo: string | null
   status: MemberStatus
 }
 
@@ -79,7 +87,7 @@ const {
   queryFn: async () => {
     const { data, error } = await supabase
       .from('members')
-      .select('id, name, phone, status')
+      .select('id, name, phone, memo, status')
       .eq('id', memberId.value)
       .maybeSingle()
 
@@ -396,6 +404,7 @@ const member = computed<MemberDetailData | undefined>(() => {
     id: dbMember.value.id,
     name: dbMember.value.name,
     phone: dbMember.value.phone,
+    memo: dbMember.value.memo,
     status,
   }
 })
@@ -678,6 +687,21 @@ onMounted(async () => {
         <p v-if="exportError" role="alert" class="mt-2 text-sm text-red-600">
           {{ exportError }}
         </p>
+
+        <!-- 회원 메모 -->
+        <div class="mt-5 border-t border-slate-100 pt-4">
+          <h2 class="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <StickyNote :size="16" class="text-slate-500" aria-hidden="true" />
+            회원 메모
+          </h2>
+
+          <p
+            class="mt-3 whitespace-pre-wrap break-words rounded-lg bg-slate-50 px-4 py-3 text-sm leading-relaxed"
+            :class="member.memo?.trim() ? 'text-slate-700' : 'text-slate-400'"
+          >
+            {{ member.memo?.trim() || '등록된 메모가 없습니다.' }}
+          </p>
+        </div>
 
         <!-- 회원 소속 근무처 -->
         <div class="mt-5 border-t border-slate-100 pt-4">

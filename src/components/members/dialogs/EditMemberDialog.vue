@@ -24,11 +24,16 @@ const editDialog = ref<HTMLDialogElement | null>(null)
 const editMember = ref({
   name: '',
   phone: '',
+  memo: '',
 })
 
 // 기존 회원 정보
 const originalName = ref('')
 const originalPhone = ref('')
+const originalMemo = ref('')
+
+// 회원 메모 조회 상태
+const isMemoLoading = ref(false)
 
 // 회원 수정 오류
 const editError = ref('')
@@ -63,13 +68,14 @@ const {
 
 // Supabase 회원 정보 수정 Mutation
 const { mutateAsync: updateMember, isPending: isUpdating } = useMutation({
-  // 회원명 및 연락처 수정
-  mutationFn: async (member: { name: string; phone: string }) => {
+  // 회원명, 연락처 및 메모 수정
+  mutationFn: async (member: { name: string; phone: string; memo: string | null }) => {
     const { data, error } = await supabase
       .from('members')
       .update({
         name: member.name,
         phone: member.phone,
+        memo: member.memo,
       })
       .eq('id', props.memberId)
       .select('id')
@@ -97,7 +103,9 @@ const { mutateAsync: updateMember, isPending: isUpdating } = useMutation({
 const isSubmitting = ref(false)
 
 // 수정 또는 검사 진행 상태
-const isBusy = computed(() => isSubmitting.value || isUpdating.value || isChecking.value)
+const isBusy = computed(
+  () => isSubmitting.value || isUpdating.value || isChecking.value || isMemoLoading.value,
+)
 
 // 회원 정보 수정 오류 메시지 통합
 const formError = computed(() => editError.value || nameCheckError.value || phoneCheckError.value)
@@ -106,7 +114,8 @@ const formError = computed(() => editError.value || nameCheckError.value || phon
 const hasChanges = computed(() => {
   return (
     editMember.value.name.trim() !== originalName.value ||
-    normalizePhone(editMember.value.phone) !== originalPhone.value
+    normalizePhone(editMember.value.phone) !== originalPhone.value ||
+    editMember.value.memo.trim() !== originalMemo.value.trim()
   )
 })
 
@@ -120,7 +129,6 @@ const isSubmitDisabled = computed(() => {
 
   // 회원명 미입력
   const name = editMember.value.name.trim()
-
   if (!name) return true
 
   // 회원명이 변경된 경우 중복 검사 완료 여부 확인
@@ -151,13 +159,17 @@ const isSubmitDisabled = computed(() => {
 })
 
 // 회원 수정 모달 열기
-function openEditDialog() {
+async function openEditDialog() {
+  if (editDialog.value?.open) return
+
   originalName.value = props.name.trim()
   originalPhone.value = normalizePhone(props.phone)
+  originalMemo.value = ''
 
   editMember.value = {
     name: originalName.value,
     phone: formatPhone(originalPhone.value),
+    memo: '',
   }
 
   editError.value = ''
@@ -170,6 +182,27 @@ function openEditDialog() {
   checkedPhone.value = originalPhone.value
 
   editDialog.value?.showModal()
+
+  // 회원 메모는 모달이 열릴 때 DB에서 최신 내용 조회
+  isMemoLoading.value = true
+
+  try {
+    const { data, error } = await supabase
+      .from('members')
+      .select('memo')
+      .eq('id', props.memberId)
+      .single()
+
+    if (error) throw error
+
+    originalMemo.value = data.memo ?? ''
+    editMember.value.memo = originalMemo.value
+  } catch (error) {
+    console.error('회원 메모 조회 오류:', error)
+    editError.value = '회원 메모를 불러오지 못했습니다. 창을 닫고 다시 시도해 주세요.'
+  } finally {
+    isMemoLoading.value = false
+  }
 }
 
 // 회원 수정 모달 닫기
@@ -227,11 +260,11 @@ function handlePhoneInput(event: Event) {
 // 회원 정보 수정
 async function submitEdit() {
   if (isSubmitDisabled.value) return
-
   if (await blockDemoWrite()) return
 
   const name = editMember.value.name.trim()
   const phone = normalizePhone(editMember.value.phone)
+  const memo = editMember.value.memo.trim()
 
   editError.value = ''
   isSubmitting.value = true
@@ -239,25 +272,31 @@ async function submitEdit() {
   let isSuccess = false
 
   try {
-    // 저장 직전 회원명 중복 재검사
-    const isNameDuplicate = await checkNameDuplicate()
+    // 회원명이 변경된 경우에만 저장 직전 중복 재검사
+    if (name !== originalName.value) {
+      const isNameDuplicate = await checkNameDuplicate()
 
-    // 회원명 검사 실패 시 수정 중단
-    if (isNameDuplicate === null || nameCheckError.value) return
+      if (isNameDuplicate === null || nameCheckError.value) return
 
-    // 중복 이름을 확인하지 않았다면 수정 중단
-    if (isNameDuplicate && !isNameDuplicateConfirmed.value) {
-      return
+      if (isNameDuplicate && !isNameDuplicateConfirmed.value) {
+        return
+      }
     }
 
-    // 저장 직전 연락처 중복 재검사
-    const isPhoneAvailable = await checkPhoneDuplicate()
+    // 연락처가 변경된 경우에만 저장 직전 중복 재검사
+    // 메모만 수정한 경우 기존 회원명과 연락처의 검사는 생략
+    if (phone !== originalPhone.value) {
+      const isPhoneAvailable = await checkPhoneDuplicate()
 
-    // 연락처 검사 실패 시 수정 중단
-    if (!isPhoneAvailable || phoneCheckError.value) return
+      if (!isPhoneAvailable || phoneCheckError.value) return
+    }
 
     // Supabase 회원 정보 수정
-    await updateMember({ name, phone })
+    await updateMember({
+      name,
+      phone,
+      memo: memo || null,
+    })
 
     isSuccess = true
   } catch (error) {
@@ -297,7 +336,7 @@ defineExpose({
     <h2 id="edit-dialog-title" class="text-xl font-bold text-slate-900">회원 정보 수정</h2>
 
     <!-- 모달 설명 -->
-    <p class="mt-2 text-sm text-slate-500">회원명과 연락처를 수정할 수 있습니다.</p>
+    <p class="mt-2 text-sm text-slate-500">회원명, 연락처와 회원 메모를 수정할 수 있습니다.</p>
 
     <!-- 회원 정보 수정 폼 -->
     <form class="mt-6 space-y-5" @submit.prevent="submitEdit">
@@ -361,6 +400,27 @@ defineExpose({
         <!-- 연락처 중복 오류 -->
         <p v-if="phoneError" role="alert" class="mt-2 text-xs text-red-600">
           {{ phoneError }}
+        </p>
+      </div>
+
+      <!-- 회원 메모 -->
+      <div>
+        <label for="edit-member-memo" class="mb-2 block text-sm font-medium text-slate-700">
+          회원 메모
+          <span class="font-normal text-slate-400">(선택)</span>
+        </label>
+
+        <textarea
+          id="edit-member-memo"
+          v-model="editMember.memo"
+          rows="4"
+          :disabled="isBusy"
+          placeholder="회원에 대해 참고할 사항을 입력해 주세요."
+          class="w-full resize-y rounded-lg border border-slate-200 px-4 py-3 text-sm leading-relaxed outline-none focus:border-blue-500 disabled:opacity-50"
+        ></textarea>
+
+        <p v-if="isMemoLoading" role="status" class="mt-2 text-xs text-slate-500">
+          기존 회원 메모를 불러오는 중...
         </p>
       </div>
 

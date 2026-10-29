@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
-import { Info, X } from 'lucide-vue-next'
+import { Info, X, PanelLeftClose, PanelLeftOpen } from 'lucide-vue-next'
 
 import { getTrainerContext } from '@/api/trainerContext'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
@@ -14,8 +14,15 @@ const router = useRouter()
 // 데모 사용자 여부
 const isDemo = ref(false)
 
+// PC 사이드바 접힘 상태
+const isDesktopSidebarCollapsed = ref(false)
+const SIDEBAR_STORAGE_KEY = 'remind-pt-sidebar-collapsed'
+
 // 공통 레이아웃 진입 시 데모 모드 확인
 onMounted(async () => {
+  // 이전 PC 사이드바 상태 복원
+  isDesktopSidebarCollapsed.value = localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true'
+
   try {
     const context = await getTrainerContext()
     isDemo.value = context.isDemo
@@ -23,6 +30,13 @@ onMounted(async () => {
     console.error('데모 모드 확인 오류:', error)
   }
 })
+
+// PC 사이드바 접기 / 펼치기
+function toggleDesktopSidebar() {
+  isDesktopSidebarCollapsed.value = !isDesktopSidebarCollapsed.value
+
+  localStorage.setItem(SIDEBAR_STORAGE_KEY, String(isDesktopSidebarCollapsed.value))
+}
 
 // 모바일 메뉴 열림 상태
 const isSidebarOpen = ref(false)
@@ -109,9 +123,24 @@ watch(
 
 <template>
   <div class="min-h-screen bg-slate-50 lg:flex">
-    <!-- 왼쪽 사이드바 -->
-    <div class="hidden lg:block">
-      <AppSidebar @logout="handleLogout" />
+    <!-- PC 왼쪽 사이드바 -->
+    <div
+      class="relative hidden shrink-0 transition-[width] duration-200 ease-in-out lg:block"
+      :class="isDesktopSidebarCollapsed ? 'w-20' : 'w-64'"
+    >
+      <AppSidebar :collapsed="isDesktopSidebarCollapsed" @logout="handleLogout" />
+
+      <!-- PC 사이드바 접기 / 펼치기 버튼 -->
+      <button
+        type="button"
+        class="absolute top-6 -right-3 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-blue-300 hover:text-blue-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+        :aria-label="isDesktopSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'"
+        :title="isDesktopSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'"
+        @click="toggleDesktopSidebar"
+      >
+        <PanelLeftOpen v-if="isDesktopSidebarCollapsed" :size="16" aria-hidden="true" />
+        <PanelLeftClose v-else :size="16" aria-hidden="true" />
+      </button>
     </div>
 
     <!-- 모바일 사이드바 배경 -->

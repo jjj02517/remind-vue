@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useQueryClient } from '@tanstack/vue-query'
+import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { supabase } from '@/lib/supabase'
 import {
   X,
   CalendarDays,
@@ -14,6 +15,7 @@ import {
   Trash2,
   Pencil,
   ChevronDown,
+  StickyNote,
 } from 'lucide-vue-next'
 
 import {
@@ -92,6 +94,70 @@ const isPreviousRecordsOpen = ref(false)
 const selectedHistoryAttendance = computed(() =>
   detail.value?.attendees.find((attendee) => attendee.id === selectedHistoryAttendanceId.value),
 )
+
+// ============================================
+// 수업 참여 회원별 메모 조회
+// ============================================
+
+// 현재 수업의 출석 기록 ID
+const attendanceIds = computed(() => (detail.value?.attendees ?? []).map((attendee) => attendee.id))
+
+// 회원별 메모를 출석 기록 ID 기준으로 조회
+const {
+  data: memberMemos,
+  isFetching: isMemberMemosLoading,
+  error: memberMemosError,
+} = useQuery({
+  queryKey: computed(() => ['session-member-memos', props.sessionId, ...attendanceIds.value]),
+
+  queryFn: async (): Promise<Record<string, string>> => {
+    const ids = attendanceIds.value
+
+    if (!ids.length) return {}
+
+    // 출석 기록과 회원 ID 연결
+    const { data: attendances, error: attendanceError } = await supabase
+      .from('session_attendances')
+      .select('id, member_id')
+      .in('id', ids)
+
+    if (attendanceError) throw attendanceError
+
+    const memberIds = [
+      ...new Set(
+        (attendances ?? [])
+          .map((attendance) => attendance.member_id)
+          .filter((id): id is string => !!id),
+      ),
+    ]
+
+    if (!memberIds.length) return {}
+
+    // 회원 기본 정보에 저장된 메모 조회
+    const { data: members, error: memberError } = await supabase
+      .from('members')
+      .select('id, memo')
+      .in('id', memberIds)
+
+    if (memberError) throw memberError
+
+    const memoByMemberId = new Map((members ?? []).map((member) => [member.id, member.memo ?? '']))
+
+    // 출석 기록 ID별 회원 메모 구성
+    return Object.fromEntries(
+      (attendances ?? []).map((attendance) => [
+        attendance.id,
+        memoByMemberId.get(attendance.member_id) ?? '',
+      ]),
+    )
+  },
+
+  // 수업 참여 회원이 있을 때만 조회
+  enabled: computed(() => attendanceIds.value.length > 0),
+
+  // 다시 열었을 때 최신 회원 메모 확인
+  staleTime: 0,
+})
 
 // ============================================
 // 수업 수정 폼
@@ -659,14 +725,44 @@ onMounted(() => {
                   등록된 참여 회원이 없습니다.
                 </div>
 
-                <!-- 기존 출석 버튼 대신 운동 기록 편집 컴포넌트를 사용 -->
-                <div v-else class="space-y-3">
-                  <SessionWorkoutRecordEditor
-                    v-for="attendee in detail.attendees"
-                    :key="attendee.id"
-                    :attendance="attendee"
-                    @updated="handleWorkoutRecordUpdated"
-                  />
+                <!-- 회원별 운동 기록 및 회원 메모 -->
+                <div v-else class="space-y-4">
+                  <!-- 회원 메모 조회 상태 -->
+                  <p v-if="isMemberMemosLoading" role="status" class="text-xs text-slate-500">
+                    회원 메모를 불러오는 중...
+                  </p>
+
+                  <p v-else-if="memberMemosError" role="alert" class="text-xs text-red-600">
+                    회원 메모를 불러오지 못했습니다.
+                  </p>
+
+                  <!-- 참여 회원별 정보 -->
+                  <div v-for="attendee in detail.attendees" :key="attendee.id" class="space-y-3">
+                    <!-- 회원 메모가 등록된 경우 표시 -->
+                    <div
+                      v-if="memberMemos?.[attendee.id]?.trim()"
+                      class="rounded-xl border border-amber-200 bg-amber-50 p-4"
+                    >
+                      <div class="flex items-center gap-2">
+                        <StickyNote :size="16" class="shrink-0 text-amber-600" aria-hidden="true" />
+                        <h4 class="text-sm font-semibold text-amber-900">
+                          {{ attendee.memberName }} 회원 메모
+                        </h4>
+                      </div>
+
+                      <p
+                        class="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-amber-900"
+                      >
+                        {{ memberMemos[attendee.id] }}
+                      </p>
+                    </div>
+
+                    <!-- 기존 운동 기록 및 출석 관리 -->
+                    <SessionWorkoutRecordEditor
+                      :attendance="attendee"
+                      @updated="handleWorkoutRecordUpdated"
+                    />
+                  </div>
                 </div>
               </div>
 

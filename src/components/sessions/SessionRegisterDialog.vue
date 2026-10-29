@@ -228,7 +228,7 @@ async function submit() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="session-register-title"
-      class="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl sm:p-6"
+      class="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-5 shadow-xl sm:p-6 md:max-w-[720px] lg:max-w-[900px]"
     >
       <div class="flex items-center justify-between gap-3">
         <div class="flex items-center gap-2">

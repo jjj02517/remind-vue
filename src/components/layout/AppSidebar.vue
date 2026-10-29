@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { Dumbbell, LayoutDashboard, Users, Building2, CalendarDays, LogOut } from 'lucide-vue-next'
+import {
+  Dumbbell,
+  LayoutDashboard,
+  Users,
+  Building2,
+  CalendarDays,
+  LogOut,
+  Banknote,
+} from 'lucide-vue-next'
 
 import DeleteAccountDialog from '@/components/settings/DeleteAccountDialog.vue'
 
@@ -24,6 +32,7 @@ const menus = [
   { name: '회원 관리', icon: Users, path: '/members' },
   { name: '근무처 관리', icon: Building2, path: '/companies' },
   { name: '수업 관리', icon: CalendarDays, path: '/sessions' },
+  { name: '정산 관리', icon: Banknote, path: '/settlements' },
 ]
 </script>
 
